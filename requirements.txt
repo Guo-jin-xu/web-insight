@@ -1,0 +1,25 @@
+# LangChain + LangGraph
+langchain
+langchain-community
+langchain-core
+langchain-openai
+langgraph
+
+# 国内搜索引擎
+requests
+beautifulsoup4
+lxml
+playwright
+
+
+# 数据验证
+pydantic
+
+# 环境管理
+python-dotenv
+
+# 向量数据库
+chromadb
+
+# 测试
+pytest

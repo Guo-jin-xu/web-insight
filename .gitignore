@@ -1,0 +1,22 @@
+# Runtime data
+data/
+
+# Internal docs (not for distribution)
+docs/
+
+# Reference repos
+ref-repo/
+
+# Python
+*.egg-info/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
