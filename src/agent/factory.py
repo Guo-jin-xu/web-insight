@@ -69,3 +69,41 @@ def create_browser_agent(browser: BrowserManager, task_domain: str = "", verbose
         debug=verbose,
         version="v2",
     )
+
+
+def create_custom_agent(
+    browser: BrowserManager,
+    task: str,
+    task_domain: str = "",
+    **kwargs,
+):
+    """创建自定义 Agent 实例（Phase 2 新增，替代 LangGraph create_react_agent）。
+
+    使用手写的 step/run 循环，支持 judge、loop detection 等中间件。
+    与 create_browser_agent 并存，不破坏现有 LangGraph 流程。
+
+    Args:
+        browser: 已连接的 BrowserManager
+        task: 任务描述
+        task_domain: 任务目标域名，用于检索站点经验
+
+    Returns:
+        Agent 实例
+    """
+    from src.agent.service import Agent
+
+    llm = get_llm()
+    tools = create_all_tools(browser)
+
+    site_experience = ""
+    if task_domain:
+        site_experience = memory_manager.search_experience(task_domain)
+
+    return Agent(
+        task=task,
+        llm=llm,
+        browser_session=browser,
+        tools=tools,
+        site_experience=site_experience,
+        **kwargs,
+    )
