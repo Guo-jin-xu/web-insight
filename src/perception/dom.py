@@ -80,14 +80,3 @@ def extract_links(html: str, max_count: int = 50) -> list[dict]:
         links.append({"index": i, "text": text or "(no text)", "href": href})
         i += 1
     return links
-
-
-def extract_headings(html: str) -> list[dict]:
-    soup = BeautifulSoup(html, "lxml")
-    headings = []
-    for level in ("h1", "h2", "h3"):
-        for tag in soup.find_all(level):
-            text = _clean(tag.get_text())
-            if text:
-                headings.append({"level": level, "text": text})
-    return headings

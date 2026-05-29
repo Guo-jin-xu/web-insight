@@ -2,12 +2,16 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.language_models import BaseChatModel
 
 from src.agent.judge import judge_step
+from src.agent.loop_detector import LoopDetector
+from src.agent.message_manager import MessageManager
+from src.agent.planning import TaskPlanner
 from src.agent.prompts import get_system_prompt
 from src.agent.views import (
     ActionModel,
@@ -17,6 +21,8 @@ from src.agent.views import (
     AgentState,
     BrowserStateHistory,
 )
+from src.browser.session import BrowserSession
+from src.dom.service import DomService
 from src.schemas.tool_result import ActionResult
 
 logger = logging.getLogger("web_insight.agent")
@@ -46,6 +52,11 @@ class Agent:
 
         self.state = AgentState()
         self.history = AgentHistoryList()
+        self.loop_detector = LoopDetector()
+
+        self.session_wrapper = BrowserSession(browser_session)
+        self.dom_service = DomService(browser_session)
+        self.task_planner = TaskPlanner()
 
         system_prompt = get_system_prompt(site_experience=site_experience)
         self.message_manager = MessageManager(task=task, system_prompt=system_prompt)
@@ -55,10 +66,21 @@ class Agent:
             if hasattr(t, "name"):
                 self._tool_map[t.name] = t
 
-    async def run(self, max_steps: int = 100) -> AgentHistoryList:
-        """执行任务直到完成或达到最大步数。"""
+    async def run(
+        self,
+        max_steps: int = 100,
+        on_step: Callable[["Agent"], Awaitable[None]] | None = None,
+    ) -> AgentHistoryList:
+        """执行任务直到完成或达到最大步数。
+
+        Args:
+            max_steps: 最大执行步数
+            on_step: 每步完成后的异步回调（用于流式输出等场景），接收 Agent 自身
+        """
         await self.browser_session.connect()
         self.state.session_initialized = True
+        self.session_wrapper._setup_dialog_handler()
+        self.task_planner.add_plan(self.task)
 
         while self.state.n_steps < max_steps:
             if self.state.stopped:
@@ -68,6 +90,8 @@ class Agent:
                 break
 
             is_done = await self.step()
+            if on_step is not None:
+                await on_step(self)
             if is_done:
                 break
 
@@ -96,6 +120,9 @@ class Agent:
         # Phase 4: 后处理
         await self._post_process(model_output, results)
 
+        # Loop detection: 记录 action 并检查是否注入 nudge
+        self._record_and_check_loop(model_output)
+
         return model_output.is_done
 
     async def _get_browser_state_summary(self) -> str:
@@ -103,17 +130,32 @@ class Agent:
         try:
             url = self.browser_session.page.url
             title = await self.browser_session.page.title()
-            elements = await self.browser_session.get_indexed_elements()
 
-            lines = [f"URL: {url}", f"Title: {title}", "Elements:"]
-            for el in elements:
-                bbox = el["bbox"]
-                attrs = el.get("attributes", {})
-                label = attrs.get("aria-label", "") or attrs.get("placeholder", "") or ""
-                extra = f" | {label}" if label else ""
-                lines.append(
-                    f"  [{el['index']}] <{el['tag']}> {el['text'][:40]}{extra}"
-                )
+            lines = [f"URL: {url}", f"Title: {title}"]
+
+            plan_summary = self.task_planner.summary()
+            lines.append("")
+            lines.append("--- Task Plan ---")
+            lines.append(plan_summary)
+
+            try:
+                dom_state = await self.dom_service.get_serialized_dom()
+                lines.append("")
+                lines.append("--- Interactive Elements ---")
+                lines.append(dom_state.text)
+            except Exception:
+                elements = await self.browser_session.get_indexed_elements()
+                lines.append("")
+                lines.append("--- Interactive Elements ---")
+                for el in elements:
+                    bbox = el["bbox"]
+                    attrs = el.get("attributes", {})
+                    label = attrs.get("aria-label", "") or attrs.get("placeholder", "") or ""
+                    extra = f" | {label}" if label else ""
+                    lines.append(
+                        f"  [{el['index']}] <{el['tag']}> {el['text'][:40]}{extra}"
+                    )
+
             return "\n".join(lines)
         except Exception as e:
             logger.error(f"获取浏览器状态失败: {e}")
@@ -242,6 +284,22 @@ class Agent:
         self.state.last_model_output = model_output
         self.state.last_result = results
 
+        all_success = all(r.success for r in results) if results else False
+        if all_success:
+            self.task_planner.reset_ticks()
+        else:
+            self.task_planner.tick()
+
+        if self.task_planner.should_replan():
+            self.message_manager.messages.append(
+                HumanMessage(
+                    content="<replan_suggestion>\n"
+                    "当前步骤连续失败，请考虑更换策略或调整当前计划步骤。\n"
+                    "</replan_suggestion>"
+                )
+            )
+            self.task_planner.reset_ticks()
+
         try:
             url = self.browser_session.page.url
             title = await self.browser_session.page.title()
@@ -275,27 +333,22 @@ class Agent:
             else:
                 self.state.consecutive_failures = 0
 
+    def _record_and_check_loop(self, model_output: AgentOutput) -> None:
+        """记录 action 到 LoopDetector 并注入 nudge 到消息。"""
+        try:
+            url = self.browser_session.page.url
+        except Exception:
+            url = "unknown"
 
-class MessageManager:
-    """消息管理器。"""
+        for action in model_output.action:
+            self.loop_detector.record(
+                action.tool_name, action.tool_args, url
+            )
 
-    def __init__(self, task: str, system_prompt: str):
-        self.system_prompt = system_prompt
-        self.messages: list = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"<user_request>\n{task}\n</user_request>"),
-        ]
-
-    def add_state_message(self, browser_state: str) -> None:
-        """添加浏览器状态消息。"""
-        self.messages.append(
-            HumanMessage(content=f"<browser_state>\n{browser_state}\n</browser_state>")
-        )
-
-    def get_messages(self) -> list:
-        """获取当前消息列表。"""
-        return self.messages
-
-    def maybe_compact(self) -> None:
-        """在 token 过多时压缩消息。Phase 3 实现。"""
-        pass
+        nudge = self.loop_detector.get_nudge()
+        if nudge:
+            self.message_manager.messages.append(
+                HumanMessage(
+                    content=f"<loop_reminder>\n{nudge}\n</loop_reminder>"
+                )
+            )

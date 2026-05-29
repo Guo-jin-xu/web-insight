@@ -1,8 +1,5 @@
 """Agent 工厂 — 组合 langgraph 组件创建浏览器操作 Agent。"""
 
-from langgraph.prebuilt import create_react_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-
 from src.browser.manager import BrowserManager
 from src.config.settings import settings
 from src.llm.factory import get_llm
@@ -43,6 +40,8 @@ def create_browser_agent(browser: BrowserManager, task_domain: str = "", verbose
     Returns:
         Runnable agent (langgraph CompiledStateGraph)
     """
+    from langgraph.prebuilt import create_react_agent
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
     llm = get_llm()
     tools = create_all_tools(browser)
 

@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from src.agent.factory import create_browser_agent
+from src.agent.factory import create_browser_agent, create_custom_agent
 from src.browser.manager import BrowserManager, ensure_chrome_running
 from src.config.settings import settings
 from src.memory.history import memory_manager
@@ -91,7 +91,7 @@ def extract_domain_hint(task: str) -> str:
 # ── main loop ────────────────────────────────────────────────────────
 
 async def run_task(browser: BrowserManager, task: str) -> str | None:
-    """执行单次任务并打印步骤。"""
+    """执行单次任务（LangGraph 模式）并打印步骤。"""
     domain = extract_domain_hint(task)
     agent = create_browser_agent(browser, task_domain=domain, verbose=False)
 
@@ -138,9 +138,82 @@ async def run_task(browser: BrowserManager, task: str) -> str | None:
     return final
 
 
+async def run_task_custom(browser: BrowserManager, task: str) -> str | None:
+    """执行单次任务（Phase 3 自定义 Agent 模式 — LoopDetector + MessageManager + BrowserSession + DomService + TaskPlanner）。"""
+    domain = extract_domain_hint(task)
+    agent = create_custom_agent(browser, task=task, task_domain=domain)
+
+    print(f"\n{AGENT_PREFIX} 开始执行任务 (Custom Agent)...\n")
+
+    plan = agent.task_planner.state.plan
+    if plan:
+        print(f"  {BOLD}{PURPLE}计划步骤:{RESET}")
+        for item in plan:
+            print(f"    {DIM}[{item.status.value}] Step {item.step}: {item.description}{RESET}")
+        print()
+
+    spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    spinner_idx = 0
+
+    async def on_step(ag):
+        nonlocal spinner_idx
+        step_no = ag.state.n_steps
+        output = ag.state.last_model_output
+        results = ag.state.last_result or []
+
+        if output and output.action:
+            action_names = [a.tool_name for a in output.action]
+            thinking_preview = output.thinking[:80].replace("\n", " ")
+            thinking_icon = "💭" if output.thinking else ""
+
+            if "done" in action_names:
+                print(f"\n  {BOLD}Step {step_no}{RESET}  {SUCCESS}✓ done{RESET}")
+            else:
+                print(f"\n  {BOLD}Step {step_no}{RESET}  {CYAN}→ {' + '.join(action_names)}{RESET}")
+                if thinking_preview:
+                    print(f"  {DIM}  {thinking_icon} {thinking_preview}...{RESET}")
+
+        for r in results:
+            content_preview = str(r.content)[:100].replace("\n", " ")
+            if r.success:
+                print(f"  {SUCCESS}  ✓{RESET} {DIM}{content_preview}{RESET}")
+            else:
+                print(f"  {ERROR}  ✗{RESET} {DIM}{content_preview}{RESET}")
+
+    print(f"  {DIM}执行中{RESET}", end="", flush=True)
+    history = await agent.run(
+        max_steps=settings.agent_recursion_limit,
+        on_step=on_step,
+    )
+    print()
+
+    final = history.final_result()
+    if final:
+        print(f"{AGENT_PREFIX} {SUCCESS}{BOLD}结果:{RESET}\n")
+        print(final)
+    else:
+        print(f"\n{AGENT_PREFIX} {WARN}未找到最终结果{RESET}")
+
+    if domain:
+        try:
+            memory_manager.add_experience(
+                domain,
+                task,
+                f"任务: {task}\n最终 URL: {browser.page.url}",
+            )
+        except Exception:
+            pass
+
+    return final
+
+
 async def interactive_loop():
     """交互式对话循环。"""
+    use_custom = "--custom" in sys.argv or "-c" in sys.argv
+
     print(f"\n  {BOLD}web-insight CLI{RESET} — AI 浏览器自动化")
+    if use_custom:
+        print(f"  {PURPLE}模式: Phase 3 Custom Agent{RESET}")
     print(f"  {DIM}输入任务描述，Agent 自动操作浏览器完成")
     print(f"  /quit 或 {ITALIC}Ctrl+C{RESET}{DIM} 退出  |  /clear 清除会话{RESET}\n")
 
@@ -173,7 +246,10 @@ async def interactive_loop():
                 continue
 
             # Execute task
-            await run_task(browser, user_input)
+            if use_custom:
+                await run_task_custom(browser, user_input)
+            else:
+                await run_task(browser, user_input)
 
     finally:
         await browser.disconnect()
