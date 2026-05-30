@@ -211,10 +211,12 @@ async def run_task_custom(browser: BrowserManager, task: str) -> str | None:
 
 async def handle_conversation(task: str) -> str:
     """处理日常对话——直接调用 LLM 回复，不走浏览器 Agent。"""
+    from src.agent.prompts import get_conversation_system_prompt
+
     llm = get_llm()
 
     messages = [
-        {"role": "system", "content": "你是一个有帮助的 AI 助手。请用简洁的中文回复用户的问题。"},
+        {"role": "system", "content": get_conversation_system_prompt()},
         {"role": "user", "content": task},
     ]
 

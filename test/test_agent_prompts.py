@@ -58,3 +58,66 @@ class TestSystemPrompt:
         prompt = get_system_prompt(extend_system_message="EXTRA RULE: always use visual_analyze")
         assert "EXTRA RULE" in prompt
         assert "浏览器" in prompt
+
+
+class TestCurrentTimeInjection:
+    def test_prompt_contains_current_time_section(self):
+        from src.agent.prompts import get_system_prompt
+
+        prompt = get_system_prompt()
+        assert "当前时间" in prompt
+
+    def test_prompt_contains_current_year(self):
+        from datetime import datetime
+        from src.agent.prompts import get_system_prompt
+
+        prompt = get_system_prompt()
+        current_year = str(datetime.now().year)
+        assert current_year in prompt, f"Expected prompt to contain year '{current_year}'"
+
+    def test_prompt_contains_month_and_day(self):
+        from datetime import datetime
+        from src.agent.prompts import get_system_prompt
+
+        prompt = get_system_prompt()
+        now = datetime.now()
+        assert str(now.month) in prompt
+        assert str(now.day) in prompt
+
+    def test_prompt_contains_weekday(self):
+        from src.agent.prompts import get_system_prompt
+
+        prompt = get_system_prompt()
+        weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        assert any(wd in prompt for wd in weekdays), "Expected prompt to contain weekday"
+
+    def test_prompt_still_works_with_override(self):
+        from src.agent.prompts import get_system_prompt
+
+        prompt = get_system_prompt(override_system_message="CUSTOM")
+        assert prompt == "CUSTOM"
+
+
+class TestConversationSystemPrompt:
+    def test_conversation_prompt_contains_current_time(self):
+        from datetime import datetime
+        from src.agent.prompts import get_conversation_system_prompt
+
+        prompt = get_conversation_system_prompt()
+        assert "当前时间" in prompt
+
+        current_year = str(datetime.now().year)
+        assert current_year in prompt, f"Expected conversation prompt to contain year '{current_year}'"
+
+    def test_conversation_prompt_contains_weekday(self):
+        from src.agent.prompts import get_conversation_system_prompt
+
+        prompt = get_conversation_system_prompt()
+        weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        assert any(wd in prompt for wd in weekdays)
+
+    def test_conversation_prompt_contains_role_description(self):
+        from src.agent.prompts import get_conversation_system_prompt
+
+        prompt = get_conversation_system_prompt()
+        assert "AI 助手" in prompt or "有帮助" in prompt

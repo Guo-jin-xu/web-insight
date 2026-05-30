@@ -1,5 +1,9 @@
 SYSTEM_PROMPT_TEMPLATE = """你是浏览器自动化助手，通过操作 Chrome 完成网页任务。
 
+## 当前时间
+
+{current_time}
+
 ## 输入格式
 
 每次你会收到以下信息：
@@ -54,13 +58,35 @@ def get_system_prompt(
     override_system_message: str = "",
     extend_system_message: str = "",
 ) -> str:
+    from datetime import datetime
+
     if override_system_message:
         return override_system_message
 
     se = site_experience if site_experience else "（无历史经验，首次访问此站点）"
     ext = f"\n## 额外指令\n{extend_system_message}" if extend_system_message else ""
 
+    now = datetime.now()
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    current_time = now.strftime(f"%Y年%m月%d日 {weekdays[now.weekday()]} %H:%M:%S")
+
     return SYSTEM_PROMPT_TEMPLATE.format(
+        current_time=current_time,
         site_experience=se,
         extend_message=ext,
+    )
+
+
+def get_conversation_system_prompt() -> str:
+    from datetime import datetime
+
+    now = datetime.now()
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    current_time = now.strftime(f"%Y年%m月%d日 {weekdays[now.weekday()]} %H:%M:%S")
+
+    return (
+        f"你是一个有帮助的 AI 助手。请用简洁的中文回复用户的问题。\n\n"
+        f"## 当前时间\n"
+        f"{current_time}\n\n"
+        f"注意：如果用户询问当前时间、日期、星期几等问题，请直接使用上面的时间信息回答。"
     )

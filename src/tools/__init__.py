@@ -5,6 +5,7 @@ from src.tools.browser_tools import create_browser_tools
 from src.tools.dom_tools import create_dom_tools
 from src.tools.vision_tool import create_vision_tool
 from src.tools.file_tools import create_file_tools
+from src.tools.time_tool import get_current_time
 
 
 def create_all_tools(browser: BrowserManager) -> list:
@@ -19,7 +20,7 @@ def create_all_tools(browser: BrowserManager) -> list:
     tools.extend(create_dom_tools(browser))
     tools.extend(create_browser_tools(browser))
     tools.extend(create_vision_tool(browser))
-    # file tools intentionally excluded — use done() to save final results
+    tools.append(get_current_time)
     return tools
 
 
