@@ -112,16 +112,21 @@ class Agent:
             return False
 
         self.state.last_model_output = model_output
+        self.message_manager.add_assistant_message(model_output.model_dump_json())
 
         # Phase 3: 执行 actions
         results = await self.multi_act(model_output.action)
         self.state.last_result = results
+        results_text = json.dumps([r.model_dump() for r in results], ensure_ascii=False)
+        self.message_manager.add_tool_results(results_text)
 
         # Phase 4: 后处理
         await self._post_process(model_output, results)
 
         # Loop detection: 记录 action 并检查是否注入 nudge
         self._record_and_check_loop(model_output)
+
+        self.message_manager.maybe_compact(self.llm)
 
         return model_output.is_done
 
@@ -286,6 +291,8 @@ class Agent:
 
         all_success = all(r.success for r in results) if results else False
         if all_success:
+            self.task_planner.mark_complete(self.task_planner.state.current_step)
+            self.task_planner.advance()
             self.task_planner.reset_ticks()
         else:
             self.task_planner.tick()
