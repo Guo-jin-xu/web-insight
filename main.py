@@ -19,8 +19,10 @@ from urllib.parse import urlparse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from src.agent.factory import create_browser_agent, create_custom_agent
+from src.agent.router import classify_query, QueryType
 from src.browser.manager import BrowserManager, ensure_chrome_running
 from src.config.settings import settings
+from src.llm.factory import get_llm
 from src.memory.history import memory_manager
 
 # ── colors ──────────────────────────────────────────────────────────
@@ -207,6 +209,19 @@ async def run_task_custom(browser: BrowserManager, task: str) -> str | None:
     return final
 
 
+async def handle_conversation(task: str) -> str:
+    """处理日常对话——直接调用 LLM 回复，不走浏览器 Agent。"""
+    llm = get_llm()
+
+    messages = [
+        {"role": "system", "content": "你是一个有帮助的 AI 助手。请用简洁的中文回复用户的问题。"},
+        {"role": "user", "content": task},
+    ]
+
+    response = await llm.ainvoke(messages)
+    return response.content if hasattr(response, "content") else str(response)
+
+
 async def interactive_loop():
     """交互式对话循环。"""
     use_custom = "--custom" in sys.argv or "-c" in sys.argv
@@ -245,7 +260,17 @@ async def interactive_loop():
                 print(f"{AGENT_PREFIX} 会话已清除\n")
                 continue
 
-            # Execute task
+            # Route: conversation → direct LLM, web task → agent
+            query_type = classify_query(user_input)
+            if query_type == QueryType.CONVERSATION:
+                print(f"\n{AGENT_PREFIX} {DIM}思考中...{RESET}\n")
+                reply = await handle_conversation(user_input)
+                print(f"{AGENT_PREFIX} {SUCCESS}{BOLD}回复:{RESET}\n")
+                print(reply)
+                print()
+                continue
+
+            # Execute web task
             if use_custom:
                 await run_task_custom(browser, user_input)
             else:
