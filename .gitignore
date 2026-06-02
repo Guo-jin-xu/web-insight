@@ -1,0 +1,36 @@
+# Runtime data
+data/
+
+test/
+docs/
+
+# Reference repos
+ref-repo/
+
+# Python
+*.egg-info/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg
+**/.pytest_cache/
+dist/
+build/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+.trae/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright
+playwright/.local-browsers/
