@@ -14,7 +14,7 @@ import logging
 import os
 import sys
 
-from src.agent.router import create_router_graph
+from src.agent.router import route_query
 from src.browser.manager import BrowserManager, ensure_chrome_running
 from src.exceptions import LLMError, RateLimitError
 
@@ -47,8 +47,6 @@ async def interactive_loop():
     await browser.connect()
     print(f"{SUCCESS}Chrome 已连接: {await browser.page.title()}{RESET}\n")
 
-    router = create_router_graph(browser)
-
     try:
         while True:
             try:
@@ -71,13 +69,11 @@ async def interactive_loop():
 
             try:
                 print(f"\n{AGENT_PREFIX} {DIM}分析中...{RESET}")
-                result = await router.ainvoke({"query": user_input, "query_type": "", "response": ""})
+                response = await route_query(browser, user_input)
 
-                if result.get("query_type") == "conversation" and result.get("response"):
+                if response:
                     print(f"\n{AGENT_PREFIX} {SUCCESS}{BOLD}回复:{RESET}\n")
-                    print(result["response"])
-                    print()
-                elif result.get("query_type") == "web_task":
+                    print(response)
                     print()
 
             except RateLimitError:

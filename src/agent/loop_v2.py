@@ -1,0 +1,187 @@
+"""Agent Loop v2 — 参考 browser-use 的 step 循环。
+
+不依赖 langgraph，自研循环：
+1. prepare_context — 构建消息上下文
+2. get_next_action — 调用 LLM 获取下一步动作
+3. execute_action — 执行工具
+4. post_process — 更新状态、检测循环
+
+循环终止条件：
+- LLM 调用 done 工具
+- 达到最大步数
+- 连续失败次数超限
+"""
+
+import json
+import logging
+
+from src.llm.client import LLMClient, LLMResponse
+from src.tools.registry import Registry
+
+logger = logging.getLogger(__name__)
+
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+PURPLE = "\033[38;5;99m"
+SUCCESS = "\033[32m"
+WARN = "\033[33m"
+ERROR = "\033[31m"
+
+AGENT_PREFIX = f"{BOLD}{PURPLE}[Agent]{RESET}"
+
+
+class AgentLoop:
+    """自研 Agent 循环。"""
+
+    def __init__(
+        self,
+        task: str,
+        llm_client: LLMClient,
+        registry: Registry,
+        max_steps: int = 16,
+        max_failures: int = 5,
+        system_prompt: str = "",
+    ):
+        self.task = task
+        self.llm_client = llm_client
+        self.registry = registry
+        self.max_steps = max_steps
+        self.max_failures = max_failures
+        self.system_prompt = system_prompt
+
+        # 内部状态
+        self.step_count: int = 0
+        self.consecutive_failures: int = 0
+        self._done_result: str | None = None
+        self._messages: list[dict] = []
+
+    @property
+    def is_done(self) -> bool:
+        return self._done_result is not None
+
+    def _build_messages(
+        self,
+        system_prompt: str,
+        history: list[dict],
+    ) -> list[dict]:
+        """构建消息列表。"""
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+        return messages
+
+    def _format_tool_result(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
+    ) -> dict:
+        """格式化工具执行结果为 API 消息格式。"""
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": str(result),
+        }
+
+    def _format_assistant_message(self, response: LLMResponse) -> dict:
+        """格式化助手消息（含工具调用）。"""
+        msg: dict = {"role": "assistant", "content": response.content or ""}
+
+        if response.tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                    },
+                }
+                for tc in response.tool_calls
+            ]
+
+        return msg
+
+    async def run(self) -> str | None:
+        """执行 Agent 循环。"""
+        from src.agent.prompts import BROWSER_AGENT_SYSTEM_PROMPT, get_current_time_str
+
+        system_prompt = self.system_prompt or BROWSER_AGENT_SYSTEM_PROMPT.format(
+            current_time=get_current_time_str(),
+            site_experience="（无历史经验，首次访问此站点）",
+        )
+
+        self._messages = [{"role": "user", "content": self.task}]
+
+        print(f"\n{AGENT_PREFIX} 开始执行任务...\n")
+
+        while self.step_count < self.max_steps and not self.is_done:
+            self.step_count += 1
+            try:
+                result = await self._step(system_prompt)
+                if result is not None and not self.is_done:
+                    # LLM 不调用工具时直接返回文本
+                    return result
+            except Exception as e:
+                self.consecutive_failures += 1
+                logger.error(f"Step {self.step_count} failed: {e}")
+                if self.consecutive_failures >= self.max_failures:
+                    logger.error(f"连续 {self.max_failures} 次失败，终止任务")
+                    break
+
+        if self._done_result:
+            print(f"\n{AGENT_PREFIX} {SUCCESS}{BOLD}结果:{RESET}\n")
+            print(self._done_result)
+            print()
+
+        return self._done_result
+
+    async def _step(self, system_prompt: str) -> str | None:
+        """执行单步：LLM 调用 → 工具执行 → 状态更新。"""
+        # Phase 1: 准备上下文
+        messages = self._build_messages(system_prompt, self._messages)
+        tool_schemas = self.registry.get_tool_schemas()
+
+        # Phase 2: 调用 LLM
+        response = await self.llm_client.chat_with_tools(
+            messages=messages,
+            tools=tool_schemas,
+        )
+
+        # Phase 3: 处理响应
+        if not response.has_tool_calls:
+            # LLM 未调用工具，直接返回文本
+            if response.content:
+                self._messages.append({"role": "assistant", "content": response.content})
+                return response.content
+            # 无内容也无工具调用，视为失败
+            self.consecutive_failures += 1
+            return None
+
+        # 记录助手消息
+        self._messages.append(self._format_assistant_message(response))
+
+        # Phase 4: 执行工具调用
+        for tc in response.tool_calls:
+            step_label = f"Step {self.step_count}"
+            args_preview = json.dumps(tc.arguments, ensure_ascii=False)[:60]
+            print(f"  {DIM}{step_label}{RESET}  {tc.name}({args_preview})")
+
+            try:
+                result = await self.registry.execute_action(tc.name, tc.arguments)
+                self.consecutive_failures = 0
+
+                # 检查是否调用了 done
+                if tc.name == "done":
+                    self._done_result = str(result)
+                    print(f"  {BOLD}{step_label}{RESET}  {SUCCESS}done{RESET}")
+                    return self._done_result
+
+            except Exception as e:
+                result = f"工具执行失败: {e}"
+                self.consecutive_failures += 1
+
+            # 记录工具结果
+            self._messages.append(self._format_tool_result(tc.id, tc.name, result))
+
+        return None
