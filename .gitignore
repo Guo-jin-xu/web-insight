@@ -3,10 +3,9 @@ data/
 
 test/
 tests/
-docs/
 
 # Reference repos
-ref-repo/
+browser-use-ref/
 
 # Python
 *.egg-info/

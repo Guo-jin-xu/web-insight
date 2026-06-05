@@ -1,11 +1,11 @@
-"""VLM 视觉分析 — 纯函数，截图 → VLM 结构化分析。
+"""VLM 视觉分析 — 纯 httpx 调用，不依赖 langchain。
 
 仅在 DOM fallback 或 judge 阶段调用。
 """
 
-from langchain_core.messages import HumanMessage
+import httpx
 
-from src.llm.factory import get_vlm
+from src.config.settings import settings
 from src.schemas.vision import PageAnalysis
 
 VLM_ANALYSIS_PROMPT = """你是一个网页视觉分析专家。请分析这个网页截图，返回结构化的分析结果。
@@ -28,18 +28,39 @@ async def analyze_screenshot(screenshot_b64: str) -> PageAnalysis:
     Returns:
         PageAnalysis 结构化对象
     """
-    vlm = get_vlm()
-    structured_vlm = vlm.with_structured_output(PageAnalysis)
-
-    message = HumanMessage(
-        content=[
-            {"type": "text", "text": VLM_ANALYSIS_PROMPT},
+    payload = {
+        "model": settings.vlm_model_name,
+        "messages": [
             {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
-            },
-        ]
-    )
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VLM_ANALYSIS_PROMPT},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
+                    },
+                ],
+            }
+        ],
+        "temperature": settings.vlm_temperature,
+    }
 
-    response = await structured_vlm.ainvoke([message])
-    return response
+    if settings.vlm_max_tokens is not None:
+        payload["max_tokens"] = settings.vlm_max_tokens
+
+    headers = {
+        "Authorization": f"Bearer {settings.vlm_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=settings.vlm_timeout) as client:
+        response = await client.post(
+            f"{settings.vlm_base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    content = data["choices"][0]["message"]["content"]
+    return PageAnalysis.model_validate_json(content)

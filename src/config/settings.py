@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     llm_model_name: str = "GLM-4-Flash-250414"
     llm_temperature: float = 0.1
-    llm_max_tokens: int = 2048
+    llm_max_tokens: int | None = None  # None = 不限制，由 API 自行决定
     llm_timeout: int = 30
     llm_max_retries: int = 3
 
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     vlm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     vlm_model_name: str = "GLM-4.1V-Thinking-Flash"
     vlm_temperature: float = 0.1
-    vlm_max_tokens: int = 2048
+    vlm_max_tokens: int | None = None  # None = 不限制
     vlm_timeout: int = 30
     vlm_max_retries: int = 3
 

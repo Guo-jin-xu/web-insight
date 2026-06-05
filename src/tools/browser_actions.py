@@ -18,6 +18,7 @@ from pathlib import Path
 
 from src.browser.manager import BrowserManager
 from src.perception.dom import extract_article, extract_page_text
+from src.perception.dom_service import DomService
 from src.tools.models import (
     ClickElementAction,
     DoneAction,
@@ -137,19 +138,11 @@ def create_browser_registry(browser: BrowserManager) -> Registry:
         param_model=GetDomSnapshotAction,
     )
     async def get_dom_snapshot(params: GetDomSnapshotAction):
-        elements = await browser.get_indexed_elements()
-        if not elements:
+        dom_service = DomService(browser)
+        snapshot = await dom_service.get_dom_snapshot(max_elements=params.max_elements)
+        if not snapshot or "可交互元素" not in snapshot:
             return "未找到可交互元素。页面可能尚未加载，请等待或刷新。"
-
-        lines = [f"可交互元素 (top {len(elements)}):"]
-        for el in elements[:params.max_elements]:
-            attrs = el.get("attributes", {})
-            label = attrs.get("aria-label", "") or attrs.get("placeholder", "") or attrs.get("name", "")
-            extra = f" | {label}" if label else ""
-            lines.append(
-                f"  [{el['index']}] <{el['tag']}> {el['text'][:40]}{extra}"
-            )
-        return "\n".join(lines)
+        return snapshot
 
     @reg.action(
         "标记任务完成并返回最终结果。调用后终止执行。所有提取、总结工作必须在调用 done 之前完成。",

@@ -15,6 +15,8 @@
 import json
 import logging
 
+from src.agent.action_merger import merge_redundant_actions
+from src.agent.tool_prioritizer import get_priority_tools
 from src.llm.client import LLMClient, LLMResponse
 from src.tools.registry import Registry
 
@@ -42,6 +44,7 @@ class AgentLoop:
         max_steps: int = 16,
         max_failures: int = 5,
         system_prompt: str = "",
+        get_current_url: callable = None,  # 方案C: 获取当前页面 URL
     ):
         self.task = task
         self.llm_client = llm_client
@@ -49,6 +52,7 @@ class AgentLoop:
         self.max_steps = max_steps
         self.max_failures = max_failures
         self.system_prompt = system_prompt
+        self.get_current_url = get_current_url or (lambda: "")
 
         # 内部状态
         self.step_count: int = 0
@@ -142,6 +146,19 @@ class AgentLoop:
         messages = self._build_messages(system_prompt, self._messages)
         tool_schemas = self.registry.get_tool_schemas()
 
+        # 方案C: 根据页面 URL 动态过滤工具优先级
+        try:
+            current_url = self.get_current_url()
+            if current_url:
+                prioritized = get_priority_tools(tool_schemas, current_url)
+                if len(prioritized) < len(tool_schemas):
+                    hidden = [s["function"]["name"] for s in tool_schemas
+                              if s["function"]["name"] not in {p["function"]["name"] for p in prioritized}]
+                    print(f"  {DIM}方案C: 隐藏工具{RESET} {hidden}")
+                tool_schemas = prioritized
+        except Exception as e:
+            logger.debug(f"方案C 工具优先级跳过: {e}")
+
         # Phase 2: 调用 LLM
         response = await self.llm_client.chat_with_tools(
             messages=messages,
@@ -157,6 +174,14 @@ class AgentLoop:
             # 无内容也无工具调用，视为失败
             self.consecutive_failures += 1
             return None
+
+        # 方案B: Post-processing 冗余动作合并
+        original_count = len(response.tool_calls)
+        merged_calls, skipped = merge_redundant_actions(response.tool_calls)
+        if len(merged_calls) < original_count:
+            print(f"  {DIM}方案B: 跳过冗余动作{RESET} {skipped}")
+            # 注意：跳过动作后，需要更新 tool_calls 数量
+            response.tool_calls = merged_calls
 
         # 记录助手消息
         self._messages.append(self._format_assistant_message(response))

@@ -42,4 +42,5 @@ def create_browser_agent(
         llm_client=client,
         registry=registry,
         system_prompt=system_prompt,
+        get_current_url=lambda: browser.page.url if browser._page else "",
     )

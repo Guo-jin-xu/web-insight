@@ -52,7 +52,7 @@ class LLMClient:
         self.base_url = (base_url or settings.llm_base_url).rstrip("/")
         self.model = model or settings.llm_model_name
         self.temperature = temperature if temperature is not None else settings.llm_temperature
-        self.max_tokens = max_tokens or settings.llm_max_tokens
+        self.max_tokens = max_tokens if max_tokens is not None else settings.llm_max_tokens
         self.timeout = timeout or settings.llm_timeout
 
     def _build_messages(
@@ -77,8 +77,9 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
             "temperature": temperature if temperature is not None else self.temperature,
-            "max_tokens": self.max_tokens,
         }
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
 
         return await self._request(payload)
 
@@ -93,10 +94,11 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
             "temperature": temperature if temperature is not None else self.temperature,
-            "max_tokens": self.max_tokens,
             "tools": tools,
             "tool_choice": "auto",
         }
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
 
         return await self._request(payload)
 
@@ -142,8 +144,3 @@ class LLMClient:
             finish_reason=finish_reason,
             usage=usage,
         )
-
-
-def get_llm_client() -> LLMClient:
-    """获取 LLM 客户端。"""
-    return LLMClient()

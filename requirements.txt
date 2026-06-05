@@ -1,19 +1,16 @@
-# LangChain + LangGraph
-langchain
-langchain-community
-langchain-core
-langchain-openai
-langgraph
+# HTTP 客户端
+httpx
 
-# 国内搜索引擎
-requests
+# HTML 解析
 beautifulsoup4
 lxml
-playwright
 
+# 浏览器自动化
+playwright
 
 # 数据验证
 pydantic
+pydantic-settings
 
 # 环境管理
 python-dotenv
@@ -23,3 +20,4 @@ chromadb
 
 # 测试
 pytest
+pytest-asyncio
