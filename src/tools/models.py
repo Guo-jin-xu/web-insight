@@ -34,6 +34,22 @@ class ScrollAction(BaseModel):
 class SendKeysAction(BaseModel):
     """按下键盘按键。常用: Enter 提交搜索/表单，Escape 关闭弹窗。"""
     keys: str = Field(description="按键名，如 Enter / Escape / Tab / Control+a")
+    wait_for_navigation: bool = Field(
+        default=False,
+        description="是否等待页面导航完成（Enter 提交搜索时建议设为 true）",
+    )
+
+
+class ClickCoordinateAction(BaseModel):
+    """点击页面指定坐标。用于 VLM 视觉分析后精确定位元素。"""
+    x: int = Field(ge=0, description="水平坐标（像素）")
+    y: int = Field(ge=0, description="垂直坐标（像素）")
+
+
+class VisualAnalyzeAction(BaseModel):
+    """使用视觉模型分析页面截图，定位指定元素并返回坐标。当 DOM 无法识别元素时使用。"""
+    query: str = Field(description="要查找的元素描述，如'第一个视频的链接'、'搜索按钮'")
+    max_elements: int = Field(default=10, description="最多返回的元素数量")
 
 
 class ExtractContentAction(BaseModel):
@@ -43,7 +59,17 @@ class ExtractContentAction(BaseModel):
 
 class GetDomSnapshotAction(BaseModel):
     """获取当前页面可交互元素列表。这是感知页面的首选工具。"""
-    max_elements: int = Field(default=20, description="最大返回元素数")
+    max_elements: int = Field(default=200, description="最大返回元素数")
+
+
+class GetTabsInfoAction(BaseModel):
+    """获取所有打开的标签页信息。"""
+    pass
+
+
+class SwitchTabAction(BaseModel):
+    """切换到指定标签页。"""
+    tab_index: int = Field(ge=0, description="标签页索引（0=第一个标签页）")
 
 
 class DoneAction(BaseModel):
@@ -53,5 +79,5 @@ class DoneAction(BaseModel):
 
 
 class NoParamsAction(BaseModel):
-    """无参数操作（如 go_back）。"""
+    """无参数操作（如 go_back、get_tabs_info）。"""
     pass

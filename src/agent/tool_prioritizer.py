@@ -29,8 +29,9 @@ CORE_TOOLS = {"navigate", "get_dom_snapshot", "done", "scroll", "go_back", "send
 # 搜索页隐藏的工具
 SEARCH_HIDDEN = {"extract_content"}
 
-# 文章页隐藏的工具
-ARTICLE_HIDDEN = {"click_element"}
+# 文章页隐藏的工具 — 空集（复杂任务如 B站 需要点击元素）
+# 文章页的冗余由方案B (action_merger) 处理
+ARTICLE_HIDDEN: set[str] = set()
 
 
 # 搜索 URL 检测正则

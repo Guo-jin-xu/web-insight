@@ -19,16 +19,21 @@ from pathlib import Path
 from src.browser.manager import BrowserManager
 from src.perception.dom import extract_article, extract_page_text
 from src.perception.dom_service import DomService
+from src.perception.vision import analyze_screenshot
 from src.tools.models import (
+    ClickCoordinateAction,
     ClickElementAction,
     DoneAction,
     ExtractContentAction,
     GetDomSnapshotAction,
+    GetTabsInfoAction,
     InputTextAction,
     NavigateAction,
     NoParamsAction,
     ScrollAction,
     SendKeysAction,
+    SwitchTabAction,
+    VisualAnalyzeAction,
 )
 from src.tools.registry import Registry
 
@@ -70,13 +75,27 @@ def create_browser_registry(browser: BrowserManager) -> Registry:
             return f"导航失败: {e}"
 
     @reg.action(
-        "点击页面元素。index 必须来自 get_dom_snapshot 返回的元素索引。",
+        "点击页面元素。index 来自 get_dom_snapshot 返回的元素索引。"
+        " 点击后自动检测是否有新标签页打开，如有则切换到新标签页。"
+        " 如果点击后页面跳转了（URL 变化），也会自动检测。",
         param_model=ClickElementAction,
     )
     async def click_element(params: ClickElementAction):
+        # 先开始监听新页面（在点击前注册监听器）
+        browser.start_new_page_listener()
+
         result = await browser.click_by_index(params.index)
         if result["success"]:
             el = result.get("element", {})
+
+            # 检查是否有新页面打开（点击链接可能打开新标签页）
+            new_page_result = await browser.check_for_new_page(timeout=2.0)
+            if new_page_result.get("switched"):
+                return (
+                    f"已点击 [{params.index}] <{el.get('tag', '?')}> {el.get('text', '')}，"
+                    f"检测到新标签页并已切换: {new_page_result['old_url']} → {new_page_result['new_url']}"
+                )
+
             return f"已点击 [{params.index}] <{el.get('tag', '?')}> {el.get('text', '')}"
         return f"点击失败: {result.get('error', 'unknown')}"
 
@@ -111,11 +130,25 @@ def create_browser_registry(browser: BrowserManager) -> Registry:
             return f"后退失败: {e}"
 
     @reg.action(
-        "按下键盘按键。常用: Enter 提交搜索/表单，Escape 关闭弹窗，Control+a 全选。",
+        "按下键盘按键。常用: Enter 提交搜索/表单，Escape 关闭弹窗，Control+a 全选。"
+        " Enter 提交搜索后建议设置 wait_for_navigation=true 等待页面跳转。"
+        " 如果搜索打开了新标签页，会自动切换到新标签页。",
         param_model=SendKeysAction,
     )
     async def send_keys(params: SendKeysAction):
+        if params.wait_for_navigation:
+            # 先开始监听新页面（在触发操作前注册监听器）
+            browser.start_new_page_listener()
+
         await browser.press_key(params.keys)
+
+        if params.wait_for_navigation:
+            nav_result = await browser.wait_for_navigation()
+            if nav_result.get("switched"):
+                return f"已按下 {params.keys}，检测到新标签页并已切换: {nav_result['old_url']} → {nav_result['new_url']}"
+            if nav_result.get("success"):
+                return f"已按下 {params.keys}，页面已跳转到: {nav_result['url']}"
+            return f"已按下 {params.keys}，等待导航超时: {nav_result.get('error', '')}"
         return f"已按下 {params.keys}"
 
     @reg.action(
@@ -134,15 +167,111 @@ def create_browser_registry(browser: BrowserManager) -> Registry:
         return f"页面文本 ({len(text)} 字符):\n{text}"
 
     @reg.action(
-        "获取当前页面可交互元素列表（index/tag/text/bbox）。这是感知页面的首选工具，click_element 和 input_text 通过此索引定位元素。",
+        "获取当前页面可交互元素列表（index/tag/text/bbox）。这是感知页面的首选工具，click_element 和 input_text 通过此索引定位元素。"
+        " 最多返回视口内所有可见元素。如果返回空或无法识别目标元素，请使用 visual_analyze 视觉分析降级。"
+        " 如果怀疑当前页面不是目标页面（如搜索后打开了新标签页），请使用 get_tabs_info 查看所有标签页，再用 switch_tab 切换。",
         param_model=GetDomSnapshotAction,
     )
     async def get_dom_snapshot(params: GetDomSnapshotAction):
         dom_service = DomService(browser)
         snapshot = await dom_service.get_dom_snapshot(max_elements=params.max_elements)
         if not snapshot or "可交互元素" not in snapshot:
-            return "未找到可交互元素。页面可能尚未加载，请等待或刷新。"
+            return (
+                "未找到可交互元素。页面可能尚未加载，请等待或刷新。"
+                " 如果多次获取仍为空，请使用 visual_analyze 工具通过截图分析页面。"
+            )
         return snapshot
+
+    @reg.action(
+        "点击页面指定坐标 (x, y)。配合 visual_analyze 使用：先用视觉分析定位元素，再用此工具点击坐标。"
+        " 点击后自动检测是否有新标签页打开（如点击视频链接跳转到新页面），如有则切换到新标签页。",
+        param_model=ClickCoordinateAction,
+    )
+    async def click_coordinate(params: ClickCoordinateAction):
+        browser.start_new_page_listener()
+        result = await browser.click_by_coordinate(params.x, params.y)
+
+        if result["success"]:
+            # 检查是否有新页面打开（点击坐标链接可能打开新标签页）
+            new_page_result = await browser.check_for_new_page(timeout=2.0)
+            if new_page_result.get("switched"):
+                return (
+                    f"已点击坐标 ({params.x}, {params.y})，"
+                    f"检测到新标签页并已切换: {new_page_result['old_url']} → {new_page_result['new_url']}"
+                )
+            return f"已点击坐标 ({params.x}, {params.y})"
+        return f"坐标点击失败: {result.get('error', 'unknown')}"
+
+    @reg.action(
+        "使用视觉模型分析当前页面截图，根据自然语言描述定位元素并返回坐标。"
+        " 当 DOM 无法识别元素时（如视频、图片、Canvas 内容），使用此工具降级处理。"
+        " 使用流程: visual_analyze(query='找到第一个视频') → 获取坐标 → click_coordinate(x, y) 点击。",
+        param_model=VisualAnalyzeAction,
+    )
+    async def visual_analyze(params: VisualAnalyzeAction):
+        from src.schemas.vision import PageAnalysis
+        import logging
+
+        _logger = logging.getLogger(__name__)
+
+        try:
+            screenshot_b64 = await browser.screenshot_to_b64()
+            _logger.info(f"截图成功，大小: {len(screenshot_b64)} 字符")
+            analysis: PageAnalysis = await analyze_screenshot(screenshot_b64)
+            _logger.info(f"VLM 分析成功：发现 {len(analysis.elements)} 个元素")
+        except Exception as e:
+            _logger.error(f"视觉分析失败: {e}")
+            return f"视觉分析失败: {e}\n\n请检查: 1) VLM 模型名称是否正确 2) API Key 是否有效 3) 网络是否可达"
+
+        # 过滤相关元素
+        query_lower = params.query.lower()
+        relevant = []
+        for el in analysis.elements:
+            if query_lower in el.name.lower() or query_lower in el.description.lower():
+                relevant.append(el)
+
+        if not relevant:
+            # 返回所有元素
+            relevant = analysis.elements[:params.max_elements]
+
+        result_lines = [
+            f"## 页面描述\n{analysis.page_description}",
+            f"\n## 匹配 '{params.query}' 的元素 (共 {len(relevant)} 个)",
+        ]
+        for i, el in enumerate(relevant[:params.max_elements]):
+            result_lines.append(
+                f"  [{i}] {el.name}: type={el.type}, 坐标=({el.x},{el.y}), {el.description}"
+            )
+
+        if analysis.suggestions:
+            result_lines.append(f"\n## 操作建议\n{analysis.suggestions}")
+
+        return "\n".join(result_lines)
+
+    @reg.action(
+        "获取所有打开的标签页信息（索引、URL、标题、是否激活）。"
+        " 当搜索或点击操作打开了新标签页但 agent 未自动切换时，使用此工具查看所有标签页，"
+        " 然后用 switch_tab 切换到正确的标签页。",
+        param_model=GetTabsInfoAction,
+    )
+    async def get_tabs_info(params: GetTabsInfoAction):
+        info = await browser.get_tabs_info()
+        lines = [f"共 {info['total']} 个标签页，当前激活: 索引 {info['active_index']}"]
+        for t in info["tabs"]:
+            marker = " ← 当前" if t["is_active"] else ""
+            lines.append(f"  [{t['index']}] {t['title'][:60]} | {t['url'][:80]}{marker}")
+        return "\n".join(lines)
+
+    @reg.action(
+        "切换到指定标签页。使用 get_tabs_info 查看所有标签页后，切换到目标标签页。"
+        " 切换后所有后续操作（get_dom_snapshot、click_element 等）都会在新标签页上执行。",
+        param_model=SwitchTabAction,
+    )
+    async def switch_tab(params: SwitchTabAction):
+        result = await browser.switch_to_tab(params.tab_index)
+        if result["success"]:
+            return f"已切换到标签页 [{params.tab_index}]: {result['new_url']}"
+        return f"切换失败: {result.get('error', 'unknown')}"
 
     @reg.action(
         "标记任务完成并返回最终结果。调用后终止执行。所有提取、总结工作必须在调用 done 之前完成。",

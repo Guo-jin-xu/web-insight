@@ -14,6 +14,8 @@
 
 import json
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from src.agent.action_merger import merge_redundant_actions
 from src.agent.tool_prioritizer import get_priority_tools
@@ -21,6 +23,9 @@ from src.llm.client import LLMClient, LLMResponse
 from src.tools.registry import Registry
 
 logger = logging.getLogger(__name__)
+
+# 工具调用日志文件
+TOOL_LOG_PATH = Path("data") / "tool_calls.log"
 
 BOLD = "\033[1m"
 DIM = "\033[2m"
@@ -31,6 +36,22 @@ WARN = "\033[33m"
 ERROR = "\033[31m"
 
 AGENT_PREFIX = f"{BOLD}{PURPLE}[Agent]{RESET}"
+
+
+def _log_tool_call(step: int, tool_name: str, args: dict, result: str = ""):
+    """记录工具调用到日志文件。"""
+    try:
+        TOOL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        args_preview = json.dumps(args, ensure_ascii=False)[:200]
+        line = f"[{ts}] Step {step} {tool_name}({args_preview})"
+        if result:
+            result_preview = result[:500].replace("\n", "\\n")
+            line += f"\n  -> {result_preview}"
+        with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        logger.debug(f"工具日志写入失败: {e}")
 
 
 class AgentLoop:
@@ -196,6 +217,9 @@ class AgentLoop:
                 result = await self.registry.execute_action(tc.name, tc.arguments)
                 self.consecutive_failures = 0
 
+                # 记录工具调用日志
+                _log_tool_call(self.step_count, tc.name, tc.arguments, str(result))
+
                 # 检查是否调用了 done
                 if tc.name == "done":
                     self._done_result = str(result)
@@ -205,6 +229,7 @@ class AgentLoop:
             except Exception as e:
                 result = f"工具执行失败: {e}"
                 self.consecutive_failures += 1
+                _log_tool_call(self.step_count, tc.name, tc.arguments, str(result))
 
             # 记录工具结果
             self._messages.append(self._format_tool_result(tc.id, tc.name, result))

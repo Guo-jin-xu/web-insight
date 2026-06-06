@@ -109,7 +109,7 @@ class DOMState:
     visible_elements: int = 0
     has_iframes: bool = False
 
-    def format_for_llm(self, max_elements: int = 30) -> str:
+    def format_for_llm(self, max_elements: int = 200) -> str:
         """格式化为 LLM 可读的文本。"""
         lines = [
             f"页面标题: {self.title}",
@@ -180,7 +180,7 @@ class DomService:
     def page(self) -> Page:
         return self._browser_manager.page
 
-    async def get_page_state(self, max_elements: int = 50) -> DOMState:
+    async def get_page_state(self, max_elements: int = 200) -> DOMState:
         """获取当前页面完整 DOM 状态。
 
         Returns:
@@ -213,7 +213,7 @@ class DomService:
             has_iframes=has_iframes,
         )
 
-    async def get_clickable_elements(self, max_elements: int = 50) -> list[ElementInfo]:
+    async def get_clickable_elements(self, max_elements: int = 200) -> list[ElementInfo]:
         """获取可交互元素列表（含视口可见性检测）。
 
         参考 browser-use 的 ClickableElementDetector，
@@ -271,11 +271,11 @@ class DomService:
 
         return result
 
-    async def get_dom_snapshot(self, max_elements: int = 50) -> str:
+    async def get_dom_snapshot(self, max_elements: int = 200) -> str:
         """获取 DOM 快照的文本表示（直接给 LLM 使用）。
 
         这是 get_dom_snapshot 工具的底层实现，
         替代原有的 get_indexed_elements。
         """
         state = await self.get_page_state(max_elements=max_elements)
-        return state.format_for_llm(max_elements=min(max_elements, 30))
+        return state.format_for_llm(max_elements=max_elements)

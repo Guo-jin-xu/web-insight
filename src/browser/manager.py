@@ -4,7 +4,9 @@
 提供统一的 BrowserManager。
 """
 
+import asyncio
 import base64
+import logging
 import os
 import subprocess
 import time
@@ -14,6 +16,8 @@ from typing import Any
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from src.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_chrome_running() -> bool:
@@ -66,6 +70,9 @@ class BrowserManager:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        # 新页面检测
+        self._new_page: Page | None = None
+        self._new_page_event: asyncio.Event | None = None
 
     @property
     def page(self) -> Page:
@@ -119,43 +126,73 @@ class BrowserManager:
         raw = await self.screenshot_bytes()
         return base64.b64encode(raw).decode("utf-8")
 
-    async def get_indexed_elements(self) -> list[dict]:
-        """用 JS 提取页面可交互元素列表。
+    async def get_indexed_elements(self, max_elements: int = 200) -> list[dict]:
+        """用 JS 提取页面可交互元素列表（与 DomService 使用相同 JS 脚本保证索引一致）。
 
-        返回 [{index, tag, text, bbox, attributes}]，
+        返回 [{index, tag, text, bbox, attributes, is_in_viewport}]，
         类似 browser-use 的 selector_map 文本表示。
         """
+        # 与 DomService.INTERACTIVE_ELEMENTS_JS 保持一致
         js = """
         (() => {
-            const interactive = 'a,button,input,select,textarea,[role="button"],[role="link"],[role="textbox"],'
-                + '[role="combobox"],[role="listbox"],[role="checkbox"],[role="radio"],[contenteditable="true"],'
-                + '[onclick],[tabindex]:not([tabindex="-1"])';
-            const all = document.querySelectorAll(interactive);
+            const INTERACTIVE_SELECTOR = [
+                'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
+                '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="combobox"]',
+                '[role="listbox"]', '[role="checkbox"]', '[role="radio"]',
+                '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
+                '[onclick]', 'summary', 'details',
+            ].join(',');
+
+            const viewportHeight = window.innerHeight;
+            const viewportWidth = window.innerWidth;
+
+            const allElements = document.querySelectorAll(INTERACTIVE_SELECTOR);
             const results = [];
-            all.forEach((el, i) => {
-                if (i >= 20) return;
+
+            allElements.forEach((el, i) => {
                 const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+
+                if (style.display === 'none' || style.visibility === 'hidden') return;
                 if (rect.width === 0 && rect.height === 0) return;
+
+                const isInViewport = (
+                    rect.top >= -100 &&
+                    rect.left >= -100 &&
+                    rect.bottom <= viewportHeight + 100 &&
+                    rect.right <= viewportWidth + 100
+                );
+
                 let text = (el.textContent || '').trim().slice(0, 80);
-                let tag = el.tagName.toLowerCase();
-                let attrs = {};
-                for (const attr of ['id', 'name', 'type', 'placeholder', 'aria-label', 'href', 'role', 'class']) {
+                const tag = el.tagName.toLowerCase();
+                if (tag === 'input') {
+                    text = el.value || el.placeholder || el.getAttribute('aria-label') || text;
+                }
+                if (tag === 'textarea') {
+                    text = el.value || el.placeholder || text;
+                }
+
+                const attrs = {};
+                for (const attr of ['id', 'name', 'type', 'placeholder', 'aria-label', 'href', 'role', 'title', 'alt']) {
                     const v = el.getAttribute(attr);
                     if (v) attrs[attr] = v.slice(0, 100);
                 }
+
                 results.push({
                     index: i,
                     tag: tag,
                     text: text,
-                    visible: rect.width > 0,
+                    is_in_viewport: isInViewport,
                     bbox: {x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height)},
-                    attributes: attrs
+                    attributes: attrs,
                 });
             });
+
             return results;
         })()
         """
-        return await self.page.evaluate(js)
+        raw = await self.page.evaluate(js)
+        return raw[:max_elements]
 
     async def click_by_index(self, index: int) -> dict:
         """按可交互元素索引点击。"""
@@ -193,6 +230,136 @@ class BrowserManager:
     async def press_key(self, key: str) -> dict:
         await self.page.keyboard.press(key)
         return {"success": True, "key": key}
+
+    async def click_by_coordinate(self, x: int, y: int) -> dict:
+        """按坐标点击页面。"""
+        await self.page.mouse.click(x, y)
+        return {"success": True, "x": x, "y": y}
+
+    # ── 标签页管理 ────────────────────────────────────────
+
+    async def get_tabs_info(self) -> dict:
+        """获取所有打开的标签页信息。
+
+        参考 browser-use 的 BrowserState.tabs 设计，
+        返回每个标签页的索引、URL、标题和是否激活。
+        """
+        tabs = []
+        for i, page in enumerate(self.context.pages):
+            try:
+                url = page.url
+                title = await page.title()
+            except Exception:
+                url = "(unknown)"
+                title = "(unknown)"
+            tabs.append({
+                "index": i,
+                "url": url,
+                "title": title,
+                "is_active": page == self._page,
+            })
+        return {
+            "total": len(tabs),
+            "active_index": next((i for i, t in enumerate(tabs) if t["is_active"]), -1),
+            "tabs": tabs,
+        }
+
+    async def switch_to_tab(self, tab_index: int) -> dict:
+        """切换到指定标签页。
+
+        参考 browser-use 的 switch_tab 动作。
+        """
+        pages = self.context.pages
+        if tab_index < 0 or tab_index >= len(pages):
+            return {
+                "success": False,
+                "error": f"标签页索引 {tab_index} 超出范围 (0-{len(pages)-1})",
+            }
+        old_url = self._page.url if self._page else "none"
+        self._page = pages[tab_index]
+        try:
+            await self._page.bring_to_front()
+            await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+        logger.info(f"已切换标签页: {old_url} → {self._page.url}")
+        return {
+            "success": True,
+            "old_url": old_url,
+            "new_url": self._page.url,
+            "tab_index": tab_index,
+        }
+
+    # ── 新页面/新标签页检测 ──────────────────────────────
+
+    def _on_new_page(self, page: Page):
+        """Playwright context.on('page') 回调。"""
+        logger.info(f"检测到新页面: {page.url}")
+        self._new_page = page
+        if self._new_page_event:
+            self._new_page_event.set()
+
+    def start_new_page_listener(self):
+        """开始监听新页面（在触发可能打开新标签页的操作前调用）。"""
+        self._new_page = None
+        self._new_page_event = asyncio.Event()
+        try:
+            self.context.on("page", self._on_new_page)
+        except Exception as e:
+            logger.debug(f"注册新页面监听失败: {e}")
+
+    async def check_for_new_page(self, timeout: float = 3.0) -> dict:
+        """检查是否有新页面打开，如果有则切换到新页面。
+
+        在 click 或 send_keys 后调用，检测是否打开了新标签页。
+        """
+        if self._new_page_event is None:
+            return {"switched": False, "reason": "listener not started"}
+
+        try:
+            # 等待一小段时间看是否有新页面事件
+            await asyncio.wait_for(self._new_page_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            # 没有新页面，正常
+            pass
+
+        # 清理监听器
+        try:
+            self.context.remove_listener("page", self._on_new_page)
+        except Exception:
+            pass
+
+        if self._new_page is not None and self._new_page != self._page:
+            old_url = self._page.url if self._page else "none"
+            try:
+                await self._new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            self._page = self._new_page
+            logger.info(f"已切换到新页面: {old_url} → {self._page.url}")
+            return {"switched": True, "old_url": old_url, "new_url": self._page.url}
+
+        return {"switched": False, "url": self._page.url if self._page else "none"}
+
+    # ── 导航等待 ──────────────────────────────────────────
+
+    async def wait_for_navigation(self, timeout: float = 10.0) -> dict:
+        """等待页面导航完成。
+
+        同时检测是否有新页面打开（target="_blank" 等场景）。
+        如果有新页面，自动切换到新页面。
+        """
+        # 先检查是否有新页面
+        new_page_result = await self.check_for_new_page(timeout=min(timeout, 3.0))
+        if new_page_result.get("switched"):
+            return new_page_result
+
+        # 等待当前页面导航
+        try:
+            await self.page.wait_for_load_state("domcontentloaded", timeout=timeout * 1000)
+            return {"success": True, "url": self.page.url}
+        except Exception as e:
+            return {"success": False, "error": str(e), "url": self.page.url}
 
     async def __aenter__(self):
         await self.connect()
