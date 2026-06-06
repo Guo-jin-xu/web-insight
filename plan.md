@@ -47,7 +47,7 @@
 | [src/agent/tool_prioritizer.py](src/agent/tool_prioritizer.py) | 页面类型检测 + 工具过滤 (方案C) |
 | [src/agent/action_merger.py](src/agent/action_merger.py) | 冗余动作合并 (方案B) |
 | [src/agent/prompts.py](src/agent/prompts.py) | 优化后的 System Prompt (方案A) |
-| [src/agent/loop_v2.py](src/agent/loop_v2.py) | AgentLoop 集成方案B和C |
+| [src/agent/loop.py](src/agent/loop.py) | AgentLoop 集成方案B和C |
 | [src/agent/factory.py](src/agent/factory.py) | 传递 `get_current_url` 给 AgentLoop |
 
 ### 方案C 修复记录 (2026-06-05)
@@ -155,7 +155,7 @@ Step 7  visual_analyze({"query": "第一个视频"})
 | **强化 VLM 提示词** | 明确要求仅输出 JSON、提供 JSON schema 示例、强调坐标要求 | [src/perception/vision.py](src/perception/vision.py) |
 | **HTTP 错误处理** | 检查 HTTP 状态码，非 200 返回详细错误信息 | [src/perception/vision.py](src/perception/vision.py) |
 | **增强错误信息** | 视觉分析失败时提供排查建议（模型名、API Key、网络） | [src/tools/browser_actions.py](src/tools/browser_actions.py) |
-| **工具调用日志** | 每次工具调用写入 `data/tool_calls.log`，包含时间戳、参数、结果 | [src/agent/loop_v2.py](src/agent/loop_v2.py) |
+| **工具调用日志** | 每次工具调用写入 `data/tool_calls.log`，包含时间戳、参数、结果 | [src/agent/loop.py](src/agent/loop.py) |
 
 ### 日志文件格式
 

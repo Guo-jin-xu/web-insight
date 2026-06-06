@@ -1,17 +1,15 @@
 # web-insight
 
-AI 驱动的浏览器自动化 Agent，基于 LangGraph + Playwright + 智谱 GLM。
+AI 驱动的浏览器自动化 Agent，原生异步循环 + Playwright + VLM。
 
 **核心思路**: 让 LLM 像人一样操作浏览器 — 理解意图 → 感知页面 → 做决策 → 执行操作 → 输出结果。
 
-> **当前实现**: 详细文档见 [docs/](docs/)
-
 ## 亮点
 
-- **LangGraph 路由图** — LLM 自主判断日常对话/网页操作，精确分流
-- **ReAct Agent** — 基于 `create_react_agent` 的工具调用循环，16 个 StructuredTool
+- **原生 Agent 循环** — 自研 step 循环，不依赖 LangGraph，轻量可控
 - **DOM 优先 + VLM 兜底** — 页面感知首选 DOM 解析（快），视觉分析仅兜底（准）
 - **CDP 连接** — 复用用户 Chrome 实例，可见可干预，保留登录态
+- **多标签页管理** — 自动检测新标签页，支持手动查看和切换标签页
 - **站点经验记忆** — ChromaDB 存储操作经验，跨任务复用
 - **统一异常处理** — 速率限制等 API 错误友好提示，不崩溃
 
@@ -21,12 +19,12 @@ AI 驱动的浏览器自动化 Agent，基于 LangGraph + Playwright + 智谱 GL
 
 - Python >= 3.12
 - Google Chrome 浏览器
-- 智谱 API Key（[免费注册](https://open.bigmodel.cn/)）
+- LLM API Key（OpenAI 兼容接口）
 
 ### 1. 创建环境
 
 ```bash
-conda create -n web-ai python=3.12.13
+conda create -n web-ai python=3.12
 conda activate web-ai
 ```
 
@@ -35,16 +33,13 @@ conda activate web-ai
 ```bash
 cd web-insight
 pip install -r requirements.txt
-pip install -e .
 ```
 
 ### 3. 配置 API Key
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入你的智谱 API Key:
-#   LLM_API_KEY=你的key
-#   VLM_API_KEY=你的key
+# 编辑 .env，填入 API Key 和 Base URL
 ```
 
 ### 4. 运行
@@ -64,24 +59,18 @@ python main.py
 
 Chrome 已连接: 新标签页
 
-[You] 你好，介绍一下你自己
-
-[Agent] 分析中...
-
-[Agent] 回复:
-
-你好！我是一个 AI 助手，可以帮你操作浏览器完成各种网页任务...
-
 [You] 搜索今天广州的天气
 
 [Agent] 分析中...
 
 [Agent] 开始执行任务...
 
-  Step 1  search: {'query': '今天广州天气'}...
-  Step 2  get_page_links: {}...
-  Step 3  extract_article_content: {}...
-  Step 4  done
+  Step 1  navigate({"url": "https://www.baidu.com"})
+  Step 2  send_keys({"keys": "今天广州天气", "wait_for_navigation": true})
+  Step 3  get_dom_snapshot({})
+  Step 4  click_element({"index": 3})
+  Step 5  extract_content({})
+  Step 6  done
 
 [Agent] 结果:
 
@@ -97,16 +86,16 @@ Chrome 已连接: 新标签页
   │
   ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                  Router (LangGraph StateGraph)               │
+│                      Router (router.py)                      │
 │                                                              │
-│   classify ──► conversation ──► LLM 直接回复 ──► END        │
+│   classify ──► conversation ──► LLM 直接回复                 │
 │       │                                                      │
-│       └──► web_task ──► Browser Agent ──► END               │
+│       └──► web_task ──► Browser Agent ──► done               │
 └──────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
-│           Browser Agent (create_react_agent)                 │
+│                AgentLoop (src/agent/loop.py)                  │
 │                                                              │
 │   System Prompt (时间+站点经验)                               │
 │        │                                                     │
@@ -115,7 +104,6 @@ Chrome 已连接: 新标签页
 │                                              │               │
 │                                         done 工具            │
 │                                              │               │
-│                                        NodeInterrupt         │
 │                                         终止循环             │
 └──────────────────────────────────────────────────────────────┘
                │                │                │
@@ -124,7 +112,7 @@ Chrome 已连接: 新标签页
 ┌──────────┐           ┌──────────────┐           ┌──────────┐
 │ Browser  │           │  Perception  │           │  Memory  │
 │Playwright│           │ DOM (BS4)    │           │ ChromaDB │
-│ CDP 连接 │           │ VLM (GLM-4V) │           │ 站点经验 │
+│ CDP 连接 │           │ VLM (视觉)   │           │ 站点经验 │
 └──────────┘           └──────────────┘           └──────────┘
 ```
 
@@ -135,53 +123,66 @@ web-insight/
 ├── main.py                         # CLI 交互入口
 ├── src/
 │   ├── agent/
-│   │   ├── factory.py              # Agent 工厂 (create_react_agent)
-│   │   ├── router.py               # LangGraph 路由图 (classify → conversation/web_task)
-│   │   ├── loop.py                 # 任务执行循环 (run_task + 步骤打印)
-│   │   └── prompts.py              # 提示词集中管理 (3 个 Prompt + 时间注入)
+│   │   ├── factory.py              # Agent 工厂
+│   │   ├── router.py               # 任务路由器 (classify → conversation/web_task)
+│   │   ├── loop.py                 # Agent 循环 (step 循环 + 工具调用日志)
+│   │   ├── prompts.py              # 提示词集中管理
+│   │   ├── action_merger.py        # 方案B: 冗余动作合并
+│   │   └── tool_prioritizer.py     # 方案C: 页面类型检测 + 工具优先级
 │   ├── browser/
-│   │   └── manager.py              # Playwright CDP 连接 + 元素索引系统
-│   ├── config/settings.py          # Pydantic Settings (.env 配置)
+│   │   └── manager.py              # Playwright CDP 连接 + 标签页管理 + 元素索引
+│   ├── config/
+│   │   └── settings.py             # Pydantic Settings (.env 配置)
 │   ├── exceptions.py               # 异常体系 (RateLimitError / LLMError)
-│   ├── llm/factory.py              # LLM/VLM 工厂 (OpenAI 兼容)
-│   ├── memory/history.py           # ChromaDB 站点经验管理
+│   ├── llm/
+│   │   └── client.py               # LLM/VLM 客户端 (OpenAI 兼容)
+│   ├── memory/
+│   │   └── history.py              # ChromaDB 站点经验管理
 │   ├── perception/
 │   │   ├── dom.py                  # DOM 解析 (BS4+lxml, 纯函数)
+│   │   ├── dom_service.py          # DOM 服务 (全量元素提取 + 格式化)
 │   │   └── vision.py               # VLM 截图分析 (结构化输出)
-│   ├── schemas/                    # Pydantic 数据模型
+│   ├── schemas/
 │   │   ├── tool_result.py          # 工具返回模型
 │   │   └── vision.py               # 视觉分析模型 (PageAnalysis)
 │   └── tools/
-│       ├── __init__.py             # 工具统一入口 (create_all_tools)
-│       ├── browser_tools.py        # 浏览器操作 (10 个, 含 done)
-│       ├── dom_tools.py            # DOM 感知 (4 个)
-│       ├── vision_tool.py          # VLM 分析 (1 个)
-│       ├── file_tools.py           # 文件读写 (2 个, 非默认)
-│       └── time_tool.py            # 时间工具 (1 个)
-├── docs/                           # 详细技术文档
-│   ├── architecture.md             # 架构设计
-│   ├── router.md                   # 路由器设计
-│   ├── agent.md                    # Agent 设计
-│   ├── tools.md                    # 工具系统
-│   ├── browser.md                  # 浏览器层
-│   ├── perception.md               # 感知层
-│   ├── memory.md                   # 记忆系统
-│   └── exceptions.md               # 异常处理
-├── test/                           # pytest 测试
+│       ├── registry.py             # 工具注册中心
+│       ├── browser_actions.py      # 浏览器操作工具 (12 个)
+│       └── models.py               # 工具参数模型
+├── tests/                          # pytest 测试 (89 个)
 ├── .env.example                    # 环境变量模板
 ├── pyproject.toml
 └── requirements.txt
 ```
 
+## 可用工具
+
+| 工具 | 说明 |
+|------|------|
+| `navigate` | 导航到指定 URL |
+| `click_element` | 按索引点击可交互元素 |
+| `click_coordinate` | 按坐标点击（配合 visual_analyze） |
+| `input_text` | 在输入框中输入文本 |
+| `send_keys` | 发送按键（Enter/Escape 等） |
+| `scroll` | 滚动页面 |
+| `go_back` | 返回上一页 |
+| `wait` | 等待指定时间 |
+| `extract_content` | 提取页面正文内容 |
+| `get_dom_snapshot` | 获取当前页面可交互元素列表 |
+| `visual_analyze` | VLM 视觉分析截图 |
+| `get_tabs_info` | 查看所有标签页信息 |
+| `switch_tab` | 切换到指定标签页 |
+| `done` | 标记任务完成并返回结果 |
+
 ## 技术选型
 
 | 组件 | 技术 | 选型理由 |
 |------|------|----------|
-| Agent 框架 | LangGraph `create_react_agent` | 自动处理 tool-calling 循环，稳定可靠 |
-| 路由器 | LangGraph `StateGraph` | LLM 自主分类，比关键词匹配更精确 |
-| LLM | 智谱 GLM-4-Flash (OpenAI 兼容) | 国产模型，免费额度，中文能力强 |
-| VLM | 智谱 GLM-4.1V-Thinking-Flash | 视觉理解 + 结构化输出 |
-| 浏览器驱动 | Playwright `connect_over_cdp` | 用户可见，复用登录态 |
+| Agent 循环 | 原生 async 循环 | 轻量可控，不依赖重型框架 |
+| 路由器 | LLM 文本分类 | 比关键词匹配更精确 |
+| LLM | OpenAI 兼容接口 | 可切换任意模型 |
+| VLM | 视觉模型 | 截图分析 + 结构化输出 |
+| 浏览器驱动 | Playwright CDP | 复用用户 Chrome，保留登录态 |
 | DOM 解析 | BeautifulSoup4 + lxml | 快速、轻量、纯函数 |
 | 向量存储 | ChromaDB | 嵌入式向量库，零运维 |
 | 配置 | Pydantic Settings | 类型安全 + .env 支持 |
@@ -191,24 +192,11 @@ web-insight/
 
 - **DOM 优先**: 页面感知首选 DOM 解析，快速低成本；VLM 仅兜底
 - **CDP 连接**: 复用用户 Chrome，可见可干预，保留登录态
-- **提示词集中管理**: 所有 Prompt 在 `prompts.py` 统一管理，时间注入在 LangGraph 执行前
+- **提示词集中管理**: 所有 Prompt 在 `prompts.py` 统一管理
 - **统一异常处理**: RateLimitError / LLMError 友好提示，不崩溃
-- **参考 browser-use**: 架构设计参考 browser-use 的成熟模式，以教学简化版落地
-
-## 详细文档
-
-| 文档 | 内容 |
-|------|------|
-| [架构设计](docs/architecture.md) | 整体架构、核心设计决策、模块职责 |
-| [路由器设计](docs/router.md) | LangGraph 路由图、分类逻辑、异常处理 |
-| [Agent 设计](docs/agent.md) | ReAct Agent、终止机制、结果提取 |
-| [工具系统](docs/tools.md) | 16 个工具详解、注册机制、参数注解 |
-| [浏览器层](docs/browser.md) | CDP 连接、元素索引、坐标点击 |
-| [感知层](docs/perception.md) | DOM 解析、VLM 视觉分析、DOM 优先策略 |
-| [记忆系统](docs/memory.md) | ChromaDB 站点经验、双重存储 |
-| [异常处理](docs/exceptions.md) | 异常层级、传播链、友好提示 |
+- **参考 browser-use**: 架构设计参考 browser-use 的成熟模式
 
 ## 参考项目
 
 - [browser-use](https://github.com/browser-use/browser-use) — 架构设计参考
-- [Playwright MCP](https://github.com/microsoft/playwright-mcp) — 工具接口设计参考
+- [Playwright](https://playwright.dev/) — 浏览器自动化

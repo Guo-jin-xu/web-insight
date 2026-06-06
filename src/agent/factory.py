@@ -1,6 +1,6 @@
 """Agent 工厂 — 使用原生 Agent Loop。"""
 
-from src.agent.loop_v2 import AgentLoop
+from src.agent.loop import AgentLoop
 from src.agent.prompts import BROWSER_AGENT_SYSTEM_PROMPT, get_current_time_str
 from src.browser.manager import BrowserManager
 from src.llm.client import LLMClient

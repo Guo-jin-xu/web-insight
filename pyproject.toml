@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "web-insight"
 version = "0.1.0"
-description = "Web Agent based on LangGraph and visual perception"
+description = "AI-powered browser automation agent with native async loop and visual perception"
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
@@ -13,6 +13,6 @@ where = ["."]
 include = ["src*", "test*"]
 
 [tool.pytest.ini_options]
-testpaths = ["test"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"

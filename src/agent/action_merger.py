@@ -71,14 +71,3 @@ def merge_redundant_actions(
         logger.info(f"冗余动作合并: 跳过 {len(skipped)} 个 ({skipped})")
 
     return merged, skipped
-
-
-def should_auto_extract_after_navigate(
-    previous_tool_name: str | None,
-    current_tool_calls: list[ToolCall],
-) -> bool:
-    """判断是否应该在 navigate 后自动插入 extract_content。
-
-    当前不做自动插入，仅作为未来扩展点。
-    """
-    return False

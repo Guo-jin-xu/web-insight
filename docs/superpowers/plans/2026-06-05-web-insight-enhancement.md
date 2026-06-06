@@ -41,7 +41,7 @@
 | | | `browser-use-ref/browser_use/agent/service.py#L1484-L1520` | `_inject_loop_detection_nudge()` |
 | **防检查** | （无） | `browser-use-ref/browser_use/browser/watchdogs/security_watchdog.py` | `SecurityWatchdog._is_url_allowed()` |
 | **短期记忆** | `src/memory/history.py` (ChromaDB, 未使用) | `browser-use-ref/browser_use/agent/message_manager/service.py` | `MessageManager` |
-| **Agent 循环** | `src/agent/loop_v2.py` | `browser-use-ref/browser_use/agent/service.py#L100-L300` | `Agent.__init__()`, `step()` |
+| **Agent 循环** | `src/agent/loop.py` | `browser-use-ref/browser_use/agent/service.py#L100-L300` | `Agent.__init__()`, `step()` |
 | **工具注册** | `src/tools/registry.py` | `browser-use-ref/browser_use/tools/registry/service.py` | `Registry.action()`, `_normalize_action_function_signature()` |
 | **Judge 评估** | （无） | `browser-use-ref/browser_use/agent/judge.py` | `construct_judge_messages()`, `JudgementResult` |
 | **LLM 客户端** | `src/llm/client.py` | `browser-use-ref/browser_use/llm/` | 各模型 provider 实现 |
@@ -219,7 +219,7 @@ Expected: `None`
 - Delete: `src/tools/vision_tool.py` (langchain `@tool` 装饰器，未被使用)
 - Delete: `src/tools/time_tool.py` (langchain `@tool` 装饰器，已被 system prompt 替代)
 - Delete: `src/llm/factory.py` (langchain_openai 依赖，未被使用)
-- Delete: `src/agent/loop.py` (旧 langgraph 实现，已被 loop_v2.py 替代)
+- Delete: `src/agent/loop.py` (旧 langgraph 实现，已被 loop.py 替代)
 - Delete: `src/schemas/tool_result.py` (仅被 langchain 工具使用)
 - Delete: `src/schemas/vision.py` (仅被 langchain vision_tool 使用)
 - Modify: `src/perception/vision.py` (移除 langchain 依赖，改为原生 httpx)
@@ -674,7 +674,7 @@ Expected: `DomService OK`
 **Files:**
 - Create: `src/browser/watchdogs.py` (弹窗处理 + 基础 watchdog 框架)
 - Modify: `src/browser/manager.py` (添加弹窗状态管理)
-- Modify: `src/agent/loop_v2.py` (在 step 循环中检查弹窗)
+- Modify: `src/agent/loop.py` (在 step 循环中检查弹窗)
 
 - [ ] **Step 1: 创建 watchdogs.py — 弹窗自动处理**
 
@@ -787,7 +787,7 @@ class BrowserManager:
 - [ ] **Step 3: 修改 AgentLoop._step — 在每步执行前检查弹窗**
 
 ```python
-# 在 loop_v2.py 的 _step 方法开头添加：
+# 在 loop.py 的 _step 方法开头添加：
 
 async def _step(self, system_prompt: str) -> str | None:
     # 检查弹窗
@@ -815,7 +815,7 @@ Expected: `Watchdogs OK`
 
 **Files:**
 - Create: `src/agent/loop_detector.py` (ActionLoopDetector)
-- Modify: `src/agent/loop_v2.py` (集成循环检测)
+- Modify: `src/agent/loop.py` (集成循环检测)
 
 - [ ] **Step 1: 创建 loop_detector.py**
 
@@ -986,7 +986,7 @@ class LoopDetector:
 - [ ] **Step 2: 集成到 AgentLoop**
 
 ```python
-# 修改 loop_v2.py 的 AgentLoop：
+# 修改 loop.py 的 AgentLoop：
 
 from src.agent.loop_detector import LoopDetector
 
@@ -1029,7 +1029,7 @@ Expected: `LoopDetector OK`
 
 **Files:**
 - Create: `src/memory/task_memory.py` (任务内记忆管理)
-- Modify: `src/agent/loop_v2.py` (集成记忆管理)
+- Modify: `src/agent/loop.py` (集成记忆管理)
 
 - [ ] **Step 1: 创建 task_memory.py**
 
@@ -1174,7 +1174,7 @@ class MessageCompactor:
 - [ ] **Step 2: 集成到 AgentLoop**
 
 ```python
-# 修改 loop_v2.py：
+# 修改 loop.py：
 
 from src.memory.task_memory import TaskMemory, MessageCompactor
 
@@ -1589,7 +1589,7 @@ BROWSER_AGENT_SYSTEM_PROMPT = """你是浏览器自动化助手，操作 Chrome 
 ```bash
 conda activate web-ai && python -c "
 from src.agent.router import route_query
-from src.agent.loop_v2 import AgentLoop
+from src.agent.loop import AgentLoop
 from src.agent.loop_detector import LoopDetector
 from src.agent.prompts import BROWSER_AGENT_SYSTEM_PROMPT
 from src.browser.manager import BrowserManager
@@ -1659,7 +1659,7 @@ Enter a simple task like "搜索 Python 教程" and verify it works.
 | **修改** | `src/browser/manager.py` | 添加弹窗处理器、防检测、多标签/下拉/上传方法 |
 | **修改** | `src/tools/browser_actions.py` | 增强 DOM 提取、添加新工具 |
 | **修改** | `src/tools/models.py` | 添加新工具参数模型 |
-| **修改** | `src/agent/loop_v2.py` | 集成循环检测、记忆管理、弹窗检查 |
+| **修改** | `src/agent/loop.py` | 集成循环检测、记忆管理、弹窗检查 |
 | **修改** | `src/agent/prompts.py` | 更新 system prompt 反映新工具 |
 | **修改** | `requirements.txt` | 移除 langchain 依赖 |
 | **创建** | `src/perception/dom_service.py` | CDP DOM 序列化服务 |
