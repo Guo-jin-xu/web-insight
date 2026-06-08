@@ -18,8 +18,9 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agent.action_merger import merge_redundant_actions
+from src.agent.judge import Judge
 from src.agent.loop_detector import ActionLoopDetector
-from src.agent.tool_prioritizer import get_priority_tools
+from src.agent.planner import Planner
 from src.llm.client import LLMClient, LLMResponse
 from src.memory.task_memory import MessageCompactor, TaskMemory
 from src.tools.registry import Registry
@@ -36,8 +37,24 @@ PURPLE = "\033[38;5;99m"
 SUCCESS = "\033[32m"
 WARN = "\033[33m"
 ERROR = "\033[31m"
+CYAN = "\033[36m"
+BLUE = "\033[34m"
 
 AGENT_PREFIX = f"{BOLD}{PURPLE}[Agent]{RESET}"
+PLAN_PREFIX = f"{BOLD}{CYAN}[Plan]{RESET}"
+JUDGE_PREFIX = f"{BOLD}{BLUE}[Judge]{RESET}"
+REPLAN_PREFIX = f"{BOLD}{WARN}[Replan]{RESET}"
+
+# 工具结果最大长度（字符），防止 DOM snapshots 撑爆上下文
+MAX_TOOL_RESULT_LENGTH = 3000
+
+
+def _truncate_result(result: str, max_len: int = MAX_TOOL_RESULT_LENGTH) -> str:
+    """截断过长的工具结果，保留头尾。"""
+    if len(result) <= max_len:
+        return result
+    half = max_len // 2
+    return result[:half] + f"\n\n... [中间省略 {len(result) - max_len} 字符] ...\n\n" + result[-half:]
 
 
 def _log_tool_call(step: int, tool_name: str, args: dict, result: str = ""):
@@ -67,7 +84,7 @@ class AgentLoop:
         max_steps: int = 16,
         max_failures: int = 5,
         system_prompt: str = "",
-        get_current_url: callable = None,  # 方案C: 获取当前页面 URL
+        get_current_url: callable = None,  # 获取当前页面 URL（用于循环检测）
         browser=None,  # 可选：BrowserManager 引用，用于弹窗检查
     ):
         self.task = task
@@ -91,6 +108,11 @@ class AgentLoop:
         # Task 6: 短期记忆管理
         self.task_memory = TaskMemory()
         self.message_compactor = MessageCompactor(max_messages=30)
+
+        # Judge & Planner: 自我评估 + 任务规划
+        self.judge = Judge()
+        self.planner = Planner()
+        self._current_plan: list[dict] = []
 
     @property
     def is_done(self) -> bool:
@@ -116,7 +138,7 @@ class AgentLoop:
         return {
             "role": "tool",
             "tool_call_id": tool_call_id,
-            "content": str(result),
+            "content": _truncate_result(str(result)),
         }
 
     def _format_assistant_message(self, response: LLMResponse) -> dict:
@@ -144,8 +166,19 @@ class AgentLoop:
 
         system_prompt = self.system_prompt or BROWSER_AGENT_SYSTEM_PROMPT.format(
             current_time=get_current_time_str(),
-            site_experience="（无历史经验，首次访问此站点）",
         )
+
+        # 生成执行计划
+        plan_data = self.planner.generate_plan(self.task)
+        self._current_plan = plan_data["items"]
+        plan_text = self.planner.format_for_prompt(self._current_plan)
+        system_prompt += "\n\n" + plan_text
+
+        # 终端输出：Plan 概览
+        print(f"\n{PLAN_PREFIX} 生成执行计划（{len(self._current_plan)} 步）：")
+        for item in self._current_plan:
+            print(f"  Step {item['step']} {item['description']} → {item['expected_outcome']}")
+        print()
 
         self._messages = [{"role": "user", "content": self.task}]
 
@@ -160,7 +193,7 @@ class AgentLoop:
                     return result
             except Exception as e:
                 self.consecutive_failures += 1
-                logger.error(f"Step {self.step_count} failed: {e}")
+                logger.error(f"Step {self.step_count} failed: {type(e).__name__}: {e}")
                 if self.consecutive_failures >= self.max_failures:
                     logger.error(f"连续 {self.max_failures} 次失败，终止任务")
                     break
@@ -198,19 +231,6 @@ class AgentLoop:
         # Phase 1: 准备上下文
         messages = self._build_messages(system_prompt, self._messages)
         tool_schemas = self.registry.get_tool_schemas()
-
-        # 方案C: 根据页面 URL 动态过滤工具优先级
-        try:
-            current_url = self.get_current_url()
-            if current_url:
-                prioritized = get_priority_tools(tool_schemas, current_url)
-                if len(prioritized) < len(tool_schemas):
-                    hidden = [s["function"]["name"] for s in tool_schemas
-                              if s["function"]["name"] not in {p["function"]["name"] for p in prioritized}]
-                    print(f"  {DIM}方案C: 隐藏工具{RESET} {hidden}")
-                tool_schemas = prioritized
-        except Exception as e:
-            logger.debug(f"方案C 工具优先级跳过: {e}")
 
         # Phase 2: 调用 LLM
         response = await self.llm_client.chat_with_tools(
@@ -279,6 +299,36 @@ class AgentLoop:
             # 记录工具结果
             self._messages.append(self._format_tool_result(tc.id, tc.name, result))
 
+            # Judge: 仅在任务结束时（done 被调用后）或动作失败时评估
+            # 跳过成功动作的实时评估以减少性能开销
+            is_done_call = tc.name == "done"
+            is_failure = str(result).startswith("工具执行失败")
+
+            if is_done_call or is_failure:
+                judge_result = self.judge.evaluate(
+                    task=self.task,
+                    last_action={"tool": tc.name, "args": tc.arguments},
+                    result=str(result),
+                    step_count=self.step_count,
+                )
+                # 终端输出：Judge 结果
+                if judge_result.is_success:
+                    print(f"    {JUDGE_PREFIX} {SUCCESS}✓{RESET} {judge_result.reasoning}")
+                else:
+                    print(f"    {JUDGE_PREFIX} {WARN}⚠{RESET} {judge_result.evaluation}: {judge_result.reasoning}")
+                    if judge_result.suggestion:
+                        print(f"      建议: {judge_result.suggestion}")
+                if not judge_result.is_success:
+                    self._messages.append({
+                        "role": "user",
+                        "content": (
+                            f"[自我评估]\n"
+                            f"评估: {judge_result.evaluation}\n"
+                            f"原因: {judge_result.reasoning}\n"
+                            f"建议: {judge_result.suggestion}"
+                        ),
+                    })
+
         # Task 5: 尝试记录页面状态到循环检测器
         try:
             current_url = self.get_current_url()
@@ -297,6 +347,24 @@ class AgentLoop:
             self._messages.append({
                 "role": "user",
                 "content": f"[系统提醒 - 循环检测]\n{nudge}"
+            })
+
+            # Planner: 检测到循环时重规划
+            print(f"\n  {REPLAN_PREFIX} 步骤 {self.step_count} 停滞，触发重规划...")
+            replan = self.planner.replan(
+                task=self.task,
+                current_plan=self._current_plan,
+                stalled_step=self.step_count,
+                reason=nudge,
+            )
+            self._current_plan = replan["items"]
+            plan_text = self.planner.format_for_prompt(self._current_plan)
+            print(f"  {REPLAN_PREFIX} 新计划（{len(self._current_plan)} 步）：")
+            for item in self._current_plan:
+                print(f"    Step {item['step']} {item['status']} {item['description']}")
+            self._messages.append({
+                "role": "user",
+                "content": f"[重规划]\n检测到循环，已重新生成执行计划：\n{plan_text}",
             })
 
         return None

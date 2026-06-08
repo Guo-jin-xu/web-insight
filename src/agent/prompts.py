@@ -48,9 +48,6 @@ get_dom_snapshot, click_element, send_keys, input_text, scroll, go_back, extract
 - 内容已提取后继续操作
 - extract_content 之后立即调用 get_dom_snapshot（内容已提取，无需再获取元素列表）
 - 在搜索结果页调用 extract_content（应直接点击链接进入详情页）
-
-## 站点经验
-{site_experience}
 """
 
 

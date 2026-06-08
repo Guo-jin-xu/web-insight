@@ -13,7 +13,6 @@ AI 驱动的浏览器自动化 Agent，原生异步循环 + Playwright + VLM。
 - **弹窗自动处理** — 自动接受/关闭 alert/confirm/prompt 弹窗，页面崩溃自动恢复
 - **循环检测** — 检测 Agent 重复动作和页面停滞，自动提醒 LLM 调整策略
 - **短期记忆管理** — 任务内记忆（已访问 URL、关键发现、提取数据）+ 消息自动压缩
-- **站点经验记忆** — ChromaDB 存储操作经验，跨任务复用
 - **统一异常处理** — 速率限制等 API 错误友好提示，不崩溃
 
 ## 快速开始
@@ -100,7 +99,7 @@ Chrome 已连接: 新标签页
 ┌──────────────────────────────────────────────────────────────┐
 │                AgentLoop (src/agent/loop.py)                  │
 │                                                              │
-│   System Prompt (时间+站点经验)                               │
+│|   System Prompt (时间)                                       |│
 │        │                                                     │
 │        ▼                                                     │
 │   LLM 决策 ──► 工具选择 ──► 工具执行 ──► 结果返回 ──► 循环   │
@@ -109,14 +108,14 @@ Chrome 已连接: 新标签页
 │                                              │               │
 │                                         终止循环             │
 └──────────────────────────────────────────────────────────────┘
-               │                │                │
-    ┌──────────┘                │                └──────────┐
-    ▼                           ▼                           ▼
-┌──────────┐           ┌──────────────┐           ┌──────────┐
-│ Browser  │           │  Perception  │           │  Memory  │
-│Playwright│           │ DOM (BS4)    │           │ ChromaDB │
-│ CDP 连接 │           │ VLM (视觉)   │           │ 站点经验 │
-└──────────┘           └──────────────┘           └──────────┘
+               │                │
+    ┌──────────┘                │
+    ▼                           ▼
+┌──────────┐           ┌──────────────┐
+│ Browser  │           │  Perception  │
+│Playwright│           │ DOM (BS4)    │
+│ CDP 连接 │           │ VLM (视觉)   │
+└──────────┘           └──────────────┘
 ```
 
 ## 项目结构
@@ -132,7 +131,8 @@ web-insight/
 │   │   ├── prompts.py              # 提示词集中管理
 │   │   ├── action_merger.py        # 方案B: 冗余动作合并
 │   │   ├── loop_detector.py        # Task 5: 动作循环检测 + 页面停滞检测
-│   │   └── tool_prioritizer.py     # 方案C: 页面类型检测 + 工具优先级
+│   │   ├── judge.py                # 自我评估系统：每步动作质量评估
+│   │   └── planner.py              # 任务规划系统：步骤分解 + 停滞重规划
 │   ├── browser/
 │   │   ├── manager.py              # Playwright CDP 连接 + 标签页管理 + 元素索引
 │   │   ├── stealth.py              # Task 8: 浏览器防检测脚本注入
@@ -143,14 +143,12 @@ web-insight/
 │   ├── llm/
 │   │   └── client.py               # LLM/VLM 客户端 (OpenAI 兼容)
 │   ├── memory/
-│   │   ├── history.py              # ChromaDB 站点经验管理
 │   │   └── task_memory.py          # Task 6: 短期记忆管理 + 消息压缩
 │   ├── perception/
 │   │   ├── dom.py                  # DOM 解析 (BS4+lxml, 纯函数)
 │   │   ├── dom_service.py          # DOM 服务 (全量元素提取 + 格式化)
 │   │   └── vision.py               # VLM 截图分析 (结构化输出)
 │   ├── schemas/
-│   │   ├── tool_result.py          # 工具返回模型
 │   │   └── vision.py               # 视觉分析模型 (PageAnalysis)
 │   └── tools/
 │       ├── registry.py             # 工具注册中心
@@ -201,7 +199,6 @@ web-insight/
 | VLM | 视觉模型 | 截图分析 + 结构化输出 |
 | 浏览器驱动 | Playwright CDP | 复用用户 Chrome，保留登录态 |
 | DOM 解析 | BeautifulSoup4 + lxml | 快速、轻量、纯函数 |
-| 向量存储 | ChromaDB | 嵌入式向量库，零运维 |
 | 配置 | Pydantic Settings | 类型安全 + .env 支持 |
 | 测试 | pytest + pytest-asyncio | 异步测试支持 |
 

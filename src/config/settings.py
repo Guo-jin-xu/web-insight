@@ -27,20 +27,9 @@ class Settings(BaseSettings):
     # Agent
     agent_recursion_limit: int = 16
 
-    # Paths
-    experience_dir: str = "data/experiences"
-    chroma_persist_dir: str = "data/chroma"
-
     @property
     def project_root(self) -> Path:
         return Path(__file__).parent.parent.parent
-
-    def resolve_path(self, relative: str) -> Path:
-        p = Path(relative)
-        if not p.is_absolute():
-            p = self.project_root / p
-        p.mkdir(parents=True, exist_ok=True)
-        return p
 
 
 settings = Settings()

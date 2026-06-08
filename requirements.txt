@@ -15,9 +15,6 @@ pydantic-settings
 # 环境管理
 python-dotenv
 
-# 向量数据库
-chromadb
-
 # 测试
 pytest
 pytest-asyncio
