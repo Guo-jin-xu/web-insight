@@ -109,9 +109,9 @@ class AgentLoop:
         self.task_memory = TaskMemory()
         self.message_compactor = MessageCompactor(max_messages=30)
 
-        # Judge & Planner: 自我评估 + 任务规划
-        self.judge = Judge()
-        self.planner = Planner()
+        # Judge & Planner: 自我评估 + 任务规划（基于 LLM）
+        self.judge = Judge(llm_client=self.llm_client)
+        self.planner = Planner(llm_client=self.llm_client)
         self._current_plan: list[dict] = []
 
     @property
@@ -168,8 +168,8 @@ class AgentLoop:
             current_time=get_current_time_str(),
         )
 
-        # 生成执行计划
-        plan_data = self.planner.generate_plan(self.task)
+        # 生成执行计划（LLM-based）
+        plan_data = await self.planner.generate_plan(self.task)
         self._current_plan = plan_data["items"]
         plan_text = self.planner.format_for_prompt(self._current_plan)
         system_prompt += "\n\n" + plan_text
@@ -287,9 +287,31 @@ class AgentLoop:
 
                 # 检查是否调用了 done
                 if tc.name == "done":
-                    self._done_result = str(result)
+                    done_result = str(result)
                     print(f"  {BOLD}{step_label}{RESET}  {SUCCESS}done{RESET}")
-                    return self._done_result
+
+                    # Judge: 任务完成评估 — 检查任务是否真正完成
+                    judge_verdict = await self.judge.evaluate_task_completion(
+                        task=self.task,
+                        done_result=done_result,
+                        step_history=self.task_memory.steps,
+                    )
+
+                    if judge_verdict.is_success:
+                        print(f"    {JUDGE_PREFIX} {SUCCESS}✓{RESET} {judge_verdict.reasoning}")
+                        self._done_result = done_result
+                        return self._done_result
+                    else:
+                        print(f"    {JUDGE_PREFIX} {WARN}⚠{RESET} 任务未完成: {judge_verdict.failure_reason}")
+                        print(f"      分析: {judge_verdict.reasoning}")
+                        print(f"      {DIM}继续迭代...{RESET}")
+                        # 注入 Judge 反馈，让 LLM 继续执行
+                        self._messages.append({
+                            "role": "user",
+                            "content": judge_verdict.to_feedback_message(),
+                        })
+                        # 不设置 _done_result，继续循环
+                        continue
 
             except Exception as e:
                 result = f"工具执行失败: {e}"
@@ -299,35 +321,19 @@ class AgentLoop:
             # 记录工具结果
             self._messages.append(self._format_tool_result(tc.id, tc.name, result))
 
-            # Judge: 仅在任务结束时（done 被调用后）或动作失败时评估
-            # 跳过成功动作的实时评估以减少性能开销
-            is_done_call = tc.name == "done"
+            # 动作失败时记录日志（Judge 任务完成评估仅在 done 后触发）
             is_failure = str(result).startswith("工具执行失败")
-
-            if is_done_call or is_failure:
-                judge_result = self.judge.evaluate(
-                    task=self.task,
-                    last_action={"tool": tc.name, "args": tc.arguments},
-                    result=str(result),
-                    step_count=self.step_count,
-                )
-                # 终端输出：Judge 结果
-                if judge_result.is_success:
-                    print(f"    {JUDGE_PREFIX} {SUCCESS}✓{RESET} {judge_result.reasoning}")
-                else:
-                    print(f"    {JUDGE_PREFIX} {WARN}⚠{RESET} {judge_result.evaluation}: {judge_result.reasoning}")
-                    if judge_result.suggestion:
-                        print(f"      建议: {judge_result.suggestion}")
-                if not judge_result.is_success:
-                    self._messages.append({
-                        "role": "user",
-                        "content": (
-                            f"[自我评估]\n"
-                            f"评估: {judge_result.evaluation}\n"
-                            f"原因: {judge_result.reasoning}\n"
-                            f"建议: {judge_result.suggestion}"
-                        ),
-                    })
+            if is_failure:
+                print(f"    {JUDGE_PREFIX} {WARN}⚠{RESET} 动作失败: {tc.name}")
+                self._messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[动作失败反馈]\n"
+                        f"工具: {tc.name}\n"
+                        f"结果: {str(result)[:200]}\n"
+                        f"建议: 尝试不同的方式完成该操作，或跳过此步骤继续。"
+                    ),
+                })
 
         # Task 5: 尝试记录页面状态到循环检测器
         try:
@@ -349,9 +355,9 @@ class AgentLoop:
                 "content": f"[系统提醒 - 循环检测]\n{nudge}"
             })
 
-            # Planner: 检测到循环时重规划
+            # Planner: 检测到循环时重规划（LLM-based）
             print(f"\n  {REPLAN_PREFIX} 步骤 {self.step_count} 停滞，触发重规划...")
-            replan = self.planner.replan(
+            replan = await self.planner.replan(
                 task=self.task,
                 current_plan=self._current_plan,
                 stalled_step=self.step_count,

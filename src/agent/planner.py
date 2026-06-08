@@ -1,14 +1,16 @@
-"""Planning 规划系统 — 任务分解为步骤计划。
+"""Planning 规划系统 — 基于 LLM 的任务分解为步骤计划。
 
 功能：
-- 将用户任务分解为 PlanItem 列表
+- 使用 LLM 将用户任务分解为 PlanItem 列表
 - 跟踪每步执行状态
-- 停滞检测时自动重规划
+- 停滞检测时自动重规划（LLM-based）
 """
 
 import logging
 
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from src.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +55,20 @@ class Plan(BaseModel):
 
 
 class Planner:
-    """任务规划器 — 将用户任务分解为步骤计划。
+    """任务规划器 — 基于 LLM 的任务分解。
 
-    当前为规则版（不依赖 LLM），后续可扩展为 LLM-based。
+    使用 LLM 根据任务描述生成执行计划，支持停滞时重规划。
+    若 LLM 不可用，回退到通用步骤模板。
     """
 
-    def generate_plan(self, task: str) -> dict:
+    def __init__(self, llm_client: LLMClient | None = None):
+        """
+        Args:
+            llm_client: LLM 客户端，用于生成计划
+        """
+        self.llm_client = llm_client
+
+    async def generate_plan(self, task: str) -> dict:
         """根据任务生成执行计划。
 
         Args:
@@ -67,44 +77,89 @@ class Planner:
         Returns:
             {"task": str, "items": [{"step": 1, "description": "...", "expected_outcome": "...", "status": "pending"}, ...]}
         """
-        # 规则版：根据任务关键词生成通用步骤
-        task_lower = task.lower()
+        if self.llm_client is None:
+            return self._fallback_plan(task)
 
-        if any(kw in task_lower for kw in ["搜索", "天气", "查询", "查"]):
-            items = [
-                {"step": 1, "description": "导航到搜索引擎或目标网站", "expected_outcome": "页面加载完成", "status": "pending"},
-                {"step": 2, "description": "输入搜索关键词", "expected_outcome": "搜索词已输入", "status": "pending"},
-                {"step": 3, "description": "提交搜索并等待结果", "expected_outcome": "搜索结果页面加载", "status": "pending"},
-                {"step": 4, "description": "提取搜索结果内容", "expected_outcome": "获取目标信息", "status": "pending"},
-                {"step": 5, "description": "总结结果并结束任务", "expected_outcome": "任务完成", "status": "pending"},
-            ]
-        elif any(kw in task_lower for kw in ["登录", "登陆", "login", "sign"]):
-            items = [
-                {"step": 1, "description": "导航到登录页面", "expected_outcome": "登录页加载完成", "status": "pending"},
-                {"step": 2, "description": "填写用户名", "expected_outcome": "用户名已输入", "status": "pending"},
-                {"step": 3, "description": "填写密码", "expected_outcome": "密码已输入", "status": "pending"},
-                {"step": 4, "description": "点击登录按钮", "expected_outcome": "登录成功", "status": "pending"},
-            ]
-        elif any(kw in task_lower for kw in ["视频", "b站", "bilibili", "播放"]):
-            items = [
-                {"step": 1, "description": "导航到目标网站", "expected_outcome": "首页加载完成", "status": "pending"},
-                {"step": 2, "description": "搜索目标内容", "expected_outcome": "搜索结果展示", "status": "pending"},
-                {"step": 3, "description": "点击目标内容进入详情页", "expected_outcome": "详情页加载完成", "status": "pending"},
-                {"step": 4, "description": "执行目标操作（播放/下载等）", "expected_outcome": "操作完成", "status": "pending"},
-                {"step": 5, "description": "总结完成并结束任务", "expected_outcome": "任务完成", "status": "pending"},
-            ]
-        else:
-            # 通用步骤
-            items = [
-                {"step": 1, "description": "分析任务目标，导航到目标页面", "expected_outcome": "页面加载完成", "status": "pending"},
-                {"step": 2, "description": "执行页面交互操作", "expected_outcome": "交互完成", "status": "pending"},
-                {"step": 3, "description": "提取或验证结果", "expected_outcome": "获取目标信息", "status": "pending"},
-                {"step": 4, "description": "总结并结束任务", "expected_outcome": "任务完成", "status": "pending"},
-            ]
+        messages = self._build_plan_messages(task)
 
+        try:
+            response = await self.llm_client.chat(messages, temperature=0.3)
+            content = response.content.strip()
+            return self._parse_plan_response(task, content)
+        except Exception as e:
+            logger.warning(f"Planner LLM 生成计划失败，回退到通用模板: {e}")
+            return self._fallback_plan(task)
+
+    def _build_plan_messages(self, task: str) -> list[dict]:
+        """构建计划生成的 LLM 消息。"""
+        system_prompt = (
+            "你是一个任务规划助手。你的职责是将用户的任务分解为清晰的执行步骤。\n\n"
+            "要求：\n"
+            "1. 每个步骤应包含：step(序号), description(操作描述), expected_outcome(预期结果)\n"
+            "2. 步骤应具体、可执行，避免过于笼统\n"
+            "3. 对于网页操作任务，典型步骤包括：导航→搜索/交互→提取信息→总结\n"
+            "4. 步骤数量适中（通常 3-7 步）\n\n"
+            "你必须以 JSON 格式返回计划，不要添加任何其他文字：\n"
+            '{"items": [{"step": 1, "description": "...", "expected_outcome": "..."}, ...]}'
+        )
+
+        user_prompt = f"请为以下任务制定执行计划：\n\n{task}"
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    def _parse_plan_response(self, task: str, content: str) -> dict:
+        """解析 LLM 返回的计划。"""
+        import json
+
+        # 尝试从 markdown 代码块提取
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        # 尝试提取 JSON 对象
+        try:
+            data = json.loads(content)
+            items = data.get("items", [])
+            if items:
+                # 确保每个 item 有 status 字段
+                for item in items:
+                    item.setdefault("status", "pending")
+                return {"task": task, "items": items}
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 尝试从文本中提取 JSON 对象
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                data = json.loads(content[start:end + 1])
+                items = data.get("items", [])
+                if items:
+                    for item in items:
+                        item.setdefault("status", "pending")
+                    return {"task": task, "items": items}
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        logger.warning(f"Planner 无法解析 LLM 响应，回退到通用模板: {content[:100]}...")
+        return self._fallback_plan(task)
+
+    def _fallback_plan(self, task: str) -> dict:
+        """通用步骤模板（LLM 不可用时的回退）。"""
+        items = [
+            {"step": 1, "description": "导航到目标网站或搜索引擎", "expected_outcome": "页面加载完成", "status": "pending"},
+            {"step": 2, "description": "执行页面交互（搜索/点击/输入等）", "expected_outcome": "交互完成，获取目标内容", "status": "pending"},
+            {"step": 3, "description": "提取或验证所需信息", "expected_outcome": "获取目标信息", "status": "pending"},
+            {"step": 4, "description": "总结结果并结束任务", "expected_outcome": "任务完成", "status": "pending"},
+        ]
         return {"task": task, "items": items}
 
-    def replan(
+    async def replan(
         self,
         task: str,
         current_plan: list[dict],
@@ -124,8 +179,65 @@ class Planner:
         """
         logger.info(f"步骤 {stalled_step} 停滞: {reason}，重新规划...")
 
-        # 简单策略：从停滞步骤开始生成新计划
-        new_plan = self.generate_plan(task)
+        if self.llm_client is None:
+            return self._fallback_replan(task, current_plan, stalled_step, reason)
+
+        messages = self._build_replan_messages(task, current_plan, stalled_step, reason)
+
+        try:
+            response = await self.llm_client.chat(messages, temperature=0.3)
+            content = response.content.strip()
+            return self._parse_plan_response(task, content)
+        except Exception as e:
+            logger.warning(f"Planner LLM 重规划失败，回退到简单策略: {e}")
+            return self._fallback_replan(task, current_plan, stalled_step, reason)
+
+    def _build_replan_messages(
+        self,
+        task: str,
+        current_plan: list[dict],
+        stalled_step: int,
+        reason: str,
+    ) -> list[dict]:
+        """构建重规划的 LLM 消息。"""
+        plan_text = "\n".join(
+            f"Step {item['step']}: {item['description']} ({item.get('status', 'pending')})"
+            for item in current_plan
+        )
+
+        system_prompt = (
+            "你是一个任务规划助手。当前执行计划在某步骤停滞，需要重新规划。\n\n"
+            "要求：\n"
+            "1. 分析停滞原因，调整后续步骤策略\n"
+            "2. 每个步骤应包含：step(序号), description(操作描述), expected_outcome(预期结果)\n"
+            "3. 步骤应具体、可执行，避免重复导致停滞的操作\n\n"
+            "你必须以 JSON 格式返回新计划，不要添加任何其他文字：\n"
+            '{"items": [{"step": 1, "description": "...", "expected_outcome": "..."}, ...]}'
+        )
+
+        user_prompt = (
+            f"## 原始任务\n{task}\n\n"
+            f"## 当前计划\n{plan_text}\n\n"
+            f"## 停滞信息\n"
+            f"停滞步骤: Step {stalled_step}\n"
+            f"停滞原因: {reason}\n\n"
+            f"请重新制定执行计划，避免再次停滞。以 JSON 格式返回。"
+        )
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    def _fallback_replan(
+        self,
+        task: str,
+        current_plan: list[dict],
+        stalled_step: int,
+        reason: str,
+    ) -> dict:
+        """简单重规划策略（LLM 不可用时）。"""
+        new_plan = self._fallback_plan(task)
         remaining = current_plan[stalled_step - 1:] if stalled_step <= len(current_plan) else current_plan
 
         # 标记停滞步骤为 failed

@@ -85,6 +85,18 @@ class TaskMemory:
 
         return "\n\n".join(parts) if parts else ""
 
+    @property
+    def steps(self) -> list[dict]:
+        """返回步骤历史，格式兼容 Judge.evaluate_task_completion。
+
+        Returns:
+            [{"step": 1, "tool": "...", "result": "..."}, ...]
+        """
+        return [
+            {"step": s["step"], "tool": s["action"], "result": s["result_summary"]}
+            for s in self.step_results
+        ]
+
     def is_url_visited(self, url: str) -> bool:
         """检查 URL 是否已访问过。"""
         return url in self.visited_urls

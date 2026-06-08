@@ -85,21 +85,32 @@
     │   │   │   │   ├─→ registry.execute_action(name, arguments)
     │   │   │   │   ├─→ 记录到 loop_detector (排除 done/go_back/send_keys)
     │   │   │   │   ├─→ 更新 task_memory (URL/发现/步骤结果)
-    │   │   │   │   ├─→ 检查是否为 done → 设置 _done_result
+    │   │   │   │   ├─→ 检查是否为 done:
+    │   │   │   │   │   ├─→ 是 → Judge 任务完成评估
+    │   │   │   │   │   │   ├─→ 通过 → 设置 _done_result，返回结果
+    │   │   │   │   │   │   └─→ 失败 → 注入反馈，继续迭代
+    │   │   │   │   │   └─→ 否 → 继续执行
     │   │   │   │   └─→ 记录工具调用日志 (data/tool_calls.log)
     │   │   │   │
     │   │   │   └─→ 新标签页检测 (send_keys/click_element)
     │   │   │       └─→ 操作前注册 context.on('page') 监听器
     │   │   │       └─→ 操作后检查是否有新页面，自动切换
     │   │   │
-    │   │   ├─→ Phase 8: 循环检测 (Task 5)
+    │   │   ├─→ Phase 8: Judge 单步评估（仅动作失败时）
+    │   │   │   └─→ 评估失败动作，注入反馈到上下文
+    │   │   │
+    │   │   ├─→ Phase 9: 循环检测 (Task 5)
     │   │   │   ├─→ 记录页面状态 (URL + 文本 + 元素数)
     │   │   │   └─→ 检测重复动作或页面停滞
     │   │   │       ├─→ 连续 3 次相同动作 → 提醒 "请尝试不同方法"
     │   │   │       ├─→ 连续 5 次页面无变化 → 提醒 "页面可能卡住"
     │   │   │       └─→ 连续 10 次 → 强制终止
     │   │   │
-    │   │   └─→ Phase 9: 注入循环检测提醒到上下文
+    │   │   ├─→ Phase 10: 停滞重规划（Planner）
+    │   │   │   └─→ 检测到循环时 → 重新生成执行计划
+    │   │   │       └─→ 新计划注入 system prompt
+    │   │   │
+    │   │   └─→ Phase 11: 注入循环检测提醒到上下文
     │   │       └─→ 将 nudge_message 加入 messages，引导 LLM 改变策略
     │   │
     │   └─→ 返回 _done_result
@@ -126,24 +137,27 @@
 
 ---
 
-## 四、搜索执行路径优化 (三层防护)
+## 四、搜索执行路径优化 (三层防护 + Judge/Planner)
 
 ```
 用户输入: "今天广州的天气如何"
     │
-    ├─→ Phase 1: 方案 C (工具过滤)
-    │   ├─→ 当前在 bilibili.com → 识别为 VIDEO 页面
-    │   └─→ 隐藏 click_element (视频页不需要点击)
+    ├─→ Phase 0: Planner 生成执行计划
+    │   └─→ [Step1: 导航到搜索引擎, Step2: 输入搜索词, Step3: 提取天气信息]
     │
-    ├─→ Phase 2: 方案 A (Prompt 引导)
+    ├─→ Phase 1: 方案 A (Prompt 引导)
     │   └─→ System Prompt 告知:
     │       ├─→ "搜索结果页 → 直接点击链接进入详情页"
     │       ├─→ "进入详情页后 → 直接 extract_content"
     │       └─→ "禁止 extract_content 后立即 get_dom_snapshot"
     │
-    └─→ Phase 3: 方案 B (冗余合并)
-        ├─→ LLM 返回: [extract_content, get_dom_snapshot]
-        └─→ 合并器删除 get_dom_snapshot
+    ├─→ Phase 2: 方案 B (冗余合并)
+    │   ├─→ LLM 返回: [extract_content, get_dom_snapshot]
+    │   └─→ 合并器删除 get_dom_snapshot
+    │
+    └─→ Phase 3: Judge 任务完成评估（done 被调用后）
+        ├─→ 结果为空/步骤过少 → 注入反馈，继续迭代
+        └─→ 结果符合要求 → 终止任务，返回结果
 ```
 
 ---
@@ -418,7 +432,11 @@ get_dom_snapshot  ← 获取新页面元素
 | [tests/test_vlm_json_parse.py](tests/test_vlm_json_parse.py) | 8 | JSON 提取 + 日志 + VLM 修复 |
 | [tests/test_new_tab_switch.py](tests/test_new_tab_switch.py) | 26 | 详见下方 |
 | [tests/test_e2e_api.py](tests/test_e2e_api.py) | 5 | 通用 API 连通性 |
-| **总计** | **74** | |
+| [tests/test_judge.py](tests/test_judge.py) | 8 | Judge 单步评估 + 消息构建 + 结果解析 |
+| [tests/test_planner.py](tests/test_planner.py) | 10 | PlanItem + Plan + generate_plan + replan |
+| [tests/test_judge_planner_e2e.py](tests/test_judge_planner_e2e.py) | 5 | Judge + Planner 端到端集成 |
+| [tests/test_judge_task_completion.py](tests/test_judge_task_completion.py) | 11 | 任务完成评估（done后）规则验证 |
+| **总计** | **108** | |
 
 ---
 
@@ -498,6 +516,48 @@ Step 5 get_dom_snapshot({"max_elements": 200})
   → 总可交互元素: 47 | 视口可见: 35  ← 包含所有视频链接
 Step 6 click_element({"index": 39})
   → 已点击 [39] <a> 【Agent】什么是AI Agent？  ← 成功定位视频
+```
+
+---
+
+## Judge 任务完成评估流程 (2026-06-08)
+
+### 触发时机
+`done` 工具被调用后，在返回结果前执行 Judge 评估。
+
+### 评估规则
+| 规则 | 条件 | 结果 |
+|------|------|------|
+| 空结果 | `done_result` 为空字符串 | verdict=False, failure_reason="未返回任何结果" |
+| 步骤过少 | 非 done 步骤 < 2 | verdict=False, failure_reason="步骤过少，请实际执行后再结束" |
+| 任务未匹配 | 任务含"搜索/查询"但结果 < 20 字且含模糊词 | verdict=False, failure_reason="结果未包含具体信息" |
+| 通过 | 以上均不满足 | verdict=True |
+
+### 失败处理
+```
+done 被调用
+    ↓
+Judge.evaluate_task_completion()
+    ↓
+verdict=False
+    ↓
+1. 终端输出: "⚠ 任务未完成: {failure_reason}"
+2. 注入反馈消息到上下文
+3. 不设置 _done_result
+4. 继续 while 循环迭代
+```
+
+### 成功处理
+```
+done 被调用
+    ↓
+Judge.evaluate_task_completion()
+    ↓
+verdict=True
+    ↓
+1. 终端输出: "✓ {reasoning}"
+2. 设置 _done_result
+3. 返回结果，终止循环
 ```
 
 ---

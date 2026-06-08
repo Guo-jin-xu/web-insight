@@ -22,7 +22,7 @@
 | **Watchdogs** | `src/browser/watchdogs.py` | 弹窗自动处理 + 页面崩溃恢复 | **中** — 鲁棒性设计 |
 | **Loop Detector** | `src/agent/loop_detector.py` | 动作哈希 + 页面指纹循环检测 | **高** — 体现 Agent 安全防护意识 |
 | **Action Merger** | `src/agent/action_merger.py` | LLM 返回后冗余工具调用合并 | **中** — Post-processing 优化 |
-| **Judge** | `src/agent/judge.py` | 自我评估系统：每步动作质量评估 + 失败反馈注入 | **极高** — Self-correcting 设计 |
+| **Judge** | `src/agent/judge.py` | 自我评估系统：任务完成评估(done后) + 单步动作评估 + 失败反馈注入 | **极高** — Self-correcting 设计 |
 | **Planner** | `src/agent/planner.py` | 任务规划系统：步骤分解 + 停滞重规划 + 进度追踪 | **极高** — Planning 设计 |
 | **Task Memory** | `src/memory/task_memory.py` | 任务内短期记忆 + 消息自动压缩 | **高** — 记忆管理设计 |
 
@@ -55,16 +55,24 @@
 
 **实现方案**：
 ```
-Agent 每步执行后 → Judge LLM 评估
-  ├─ 评估维度: 动作是否合理、进度是否符合预期、是否需要调整策略
-  ├─ 输出格式: {evaluation: "success"/"failure"/"partial", reasoning: "...", suggestion: "..."}
-  └─ 反馈注入: 将评估结果注入下一步的上下文消息
+1. 任务完成评估（done 被调用后触发）
+   ├─ 评估维度: 结果是否满足任务要求、步骤是否充分、格式是否正确
+   ├─ 输出格式: {verdict: true/false, reasoning: "...", failure_reason: "..."}
+   ├─ 成功 → 终止任务，返回结果
+   └─ 失败 → 注入反馈到上下文，继续迭代
+
+2. 单步动作评估（动作失败时触发）
+   ├─ 评估维度: 动作是否合理、进度是否符合预期
+   ├─ 输出格式: {evaluation: "success"/"failure"/"partial", reasoning: "...", suggestion: "..."}
+   └─ 反馈注入: 将评估结果注入下一步的上下文消息
 ```
 
-**核心文件**：新增 `src/agent/judge.py`
-- `construct_judge_messages()` — 构建评估上下文
-- `JudgeResult` Pydantic 模型
-- 在 `AgentLoop._step()` 中集成 judge 评估点
+**核心文件**：`src/agent/judge.py`
+- `TaskCompletionJudge` — 任务完成评估 Pydantic 模型（verdict/reasoning/failure_reason）
+- `evaluate_task_completion()` — 基于规则的任务完成度判断（空结果/步骤过少/模糊结果）
+- `construct_task_completion_messages()` — 构建 LLM-based 评估消息（扩展用）
+- `JudgeResult` / `evaluate()` — 单步动作评估（兼容旧模式）
+- 在 `AgentLoop._step()` 中集成：done 后调用 `evaluate_task_completion()`，失败时继续循环
 
 ### P0: Planning 规划系统 ⭐⭐⭐⭐⭐
 
