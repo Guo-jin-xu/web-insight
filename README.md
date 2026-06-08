@@ -10,6 +10,7 @@ AI 驱动的浏览器自动化 Agent，原生异步循环 + Playwright + VLM。
 - **DOM 优先 + VLM 兜底** — 页面感知首选 DOM 解析（快），视觉分析仅兜底（准）
 - **CDP 连接** — 复用用户 Chrome 实例，可见可干预，保留登录态
 - **多标签页管理** — 自动检测新标签页，支持手动查看和切换标签页
+- **弹窗自动处理** — 自动接受/关闭 alert/confirm/prompt 弹窗，页面崩溃自动恢复
 - **站点经验记忆** — ChromaDB 存储操作经验，跨任务复用
 - **统一异常处理** — 速率限制等 API 错误友好提示，不崩溃
 
@@ -130,7 +131,8 @@ web-insight/
 │   │   ├── action_merger.py        # 方案B: 冗余动作合并
 │   │   └── tool_prioritizer.py     # 方案C: 页面类型检测 + 工具优先级
 │   ├── browser/
-│   │   └── manager.py              # Playwright CDP 连接 + 标签页管理 + 元素索引
+│   │   ├── manager.py              # Playwright CDP 连接 + 标签页管理 + 元素索引
+│   │   └── watchdogs.py            # 弹窗自动处理 + 页面崩溃恢复
 │   ├── config/
 │   │   └── settings.py             # Pydantic Settings (.env 配置)
 │   ├── exceptions.py               # 异常体系 (RateLimitError / LLMError)
@@ -149,7 +151,8 @@ web-insight/
 │       ├── registry.py             # 工具注册中心
 │       ├── browser_actions.py      # 浏览器操作工具 (12 个)
 │       └── models.py               # 工具参数模型
-├── tests/                          # pytest 测试 (89 个)
+├── tests/                          # pytest 测试 (107 个)
+│   ├── test_watchdogs.py           # 弹窗处理 + 页面崩溃恢复测试
 ├── .env.example                    # 环境变量模板
 ├── pyproject.toml
 └── requirements.txt

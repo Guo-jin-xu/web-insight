@@ -66,6 +66,7 @@ class AgentLoop:
         max_failures: int = 5,
         system_prompt: str = "",
         get_current_url: callable = None,  # 方案C: 获取当前页面 URL
+        browser=None,  # 可选：BrowserManager 引用，用于弹窗检查
     ):
         self.task = task
         self.llm_client = llm_client
@@ -74,6 +75,7 @@ class AgentLoop:
         self.max_failures = max_failures
         self.system_prompt = system_prompt
         self.get_current_url = get_current_url or (lambda: "")
+        self._browser = browser
 
         # 内部状态
         self.step_count: int = 0
@@ -163,6 +165,16 @@ class AgentLoop:
 
     async def _step(self, system_prompt: str) -> str | None:
         """执行单步：LLM 调用 → 工具执行 → 状态更新。"""
+        # Phase 0: 检查弹窗
+        if self._browser and self._browser.popup_handler:
+            popup = self._browser.popup_handler
+            if popup.has_pending_popups():
+                msgs = popup.get_and_clear_messages()
+                self._messages.append({
+                    "role": "user",
+                    "content": f"[系统通知] 页面弹出了以下对话框，已自动处理：\n" + "\n".join(msgs),
+                })
+
         # Phase 1: 准备上下文
         messages = self._build_messages(system_prompt, self._messages)
         tool_schemas = self.registry.get_tool_schemas()

@@ -16,6 +16,7 @@ from typing import Any
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from src.config.settings import settings
+from src.browser.watchdogs import PopupHandler
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ class BrowserManager:
         # 新页面检测
         self._new_page: Page | None = None
         self._new_page_event: asyncio.Event | None = None
+        # 弹窗处理
+        self._popup_handler: PopupHandler | None = None
 
     @property
     def page(self) -> Page:
@@ -85,6 +88,10 @@ class BrowserManager:
         if self._context is None:
             raise RuntimeError("Browser not connected. Call connect() first.")
         return self._context
+
+    @property
+    def popup_handler(self) -> PopupHandler | None:
+        return self._popup_handler
 
     async def connect(self) -> Page:
         self._playwright = await async_playwright().start()
@@ -103,6 +110,10 @@ class BrowserManager:
             self._page = pages[0]
         else:
             self._page = await self._context.new_page()
+
+        # 注册弹窗自动处理
+        self._popup_handler = PopupHandler(self._page)
+        await self._popup_handler.register()
 
         return self._page
 

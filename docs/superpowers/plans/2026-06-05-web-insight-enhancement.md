@@ -52,9 +52,9 @@
 
 ---
 
-## 搜索执行路径优化分析（基于 Terminal 日志）
+### 搜索执行路径优化分析（基于 Terminal 日志）
 
-### 当前问题
+#### 当前问题
 
 终端日志显示 "今天广州的天气如何" 的执行路径：
 
@@ -68,14 +68,14 @@ Step 6: navigate("weather.com.cn/...")  ← 直接导航到天气站
 Step 7: extract_content({})             ← 提取天气
 ```
 
-### 问题分析
+#### 问题分析
 
 1. **Step 3 冗余** — `extract_content` 已拿到页面文本，`get_dom_snapshot` 在此之后无意义（Agent 已知道页面内容）
 2. **Step 5 冗余** — 点击进入详情页后立即 `get_dom_snapshot`，而实际需要的是 `extract_content`
 3. **Step 2→6 跳跃** — 搜索后先提取内容，又点击链接，又直接导航到 weather.com.cn，说明 Agent 在搜索结果和直接导航之间犹豫
 4. **缺少 "done" 步骤** — 最终结果通过 `extract_content` 返回而非 `done`，说明 done 未被正确调用
 
-### 优化方案（参考 browser-use 的 Agent step 设计）
+#### 优化方案（参考 browser-use 的 Agent step 设计）
 
 参考 `browser-use-ref/browser_use/agent/service.py` 中 Agent 的 step 方法（约 L1080-L1179），browser-use 采用以下优化策略：
 
@@ -676,7 +676,7 @@ Expected: `DomService OK`
 - Modify: `src/browser/manager.py` (添加弹窗状态管理)
 - Modify: `src/agent/loop.py` (在 step 循环中检查弹窗)
 
-- [ ] **Step 1: 创建 watchdogs.py — 弹窗自动处理**
+- [x] **Step 1: 创建 watchdogs.py — 弹窗自动处理**
 
 ```python
 # src/browser/watchdogs.py
@@ -761,7 +761,7 @@ class PageCrashHandler:
                 return False
 ```
 
-- [ ] **Step 2: 修改 BrowserManager — 集成 PopupHandler**
+- [x] **Step 2: 修改 BrowserManager — 集成 PopupHandler**
 
 ```python
 # 在 BrowserManager 的 connect() 方法中添加：
@@ -784,7 +784,7 @@ class BrowserManager:
         return self._popup_handler
 ```
 
-- [ ] **Step 3: 修改 AgentLoop._step — 在每步执行前检查弹窗**
+- [x] **Step 3: 修改 AgentLoop._step — 在每步执行前检查弹窗**
 
 ```python
 # 在 loop.py 的 _step 方法开头添加：
@@ -802,11 +802,13 @@ async def _step(self, system_prompt: str) -> str | None:
     # ... 原有逻辑 ...
 ```
 
-- [ ] **Step 4: 验证弹窗处理**
+- [x] **Step 4: 验证弹窗处理**
 
 ```bash
 conda activate web-ai && python -c "from src.browser.watchdogs import PopupHandler, PageCrashHandler; print('Watchdogs OK')"
 ```
+
+**验证结果**: 全部 18 个 watchdogs 测试通过（PopupHandler 10 个、PageCrashHandler 4 个、BrowserManager 集成 2 个、AgentLoop 集成 2 个），全量 107 个测试通过。
 Expected: `Watchdogs OK`
 
 ---
