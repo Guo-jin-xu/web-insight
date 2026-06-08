@@ -11,6 +11,8 @@ AI 驱动的浏览器自动化 Agent，原生异步循环 + Playwright + VLM。
 - **CDP 连接** — 复用用户 Chrome 实例，可见可干预，保留登录态
 - **多标签页管理** — 自动检测新标签页，支持手动查看和切换标签页
 - **弹窗自动处理** — 自动接受/关闭 alert/confirm/prompt 弹窗，页面崩溃自动恢复
+- **循环检测** — 检测 Agent 重复动作和页面停滞，自动提醒 LLM 调整策略
+- **短期记忆管理** — 任务内记忆（已访问 URL、关键发现、提取数据）+ 消息自动压缩
 - **站点经验记忆** — ChromaDB 存储操作经验，跨任务复用
 - **统一异常处理** — 速率限制等 API 错误友好提示，不崩溃
 
@@ -126,12 +128,14 @@ web-insight/
 │   ├── agent/
 │   │   ├── factory.py              # Agent 工厂
 │   │   ├── router.py               # 任务路由器 (classify → conversation/web_task)
-│   │   ├── loop.py                 # Agent 循环 (step 循环 + 工具调用日志)
+│   │   ├── loop.py                 # Agent 循环 (step 循环 + 工具调用日志 + 循环检测 + 记忆管理)
 │   │   ├── prompts.py              # 提示词集中管理
 │   │   ├── action_merger.py        # 方案B: 冗余动作合并
+│   │   ├── loop_detector.py        # Task 5: 动作循环检测 + 页面停滞检测
 │   │   └── tool_prioritizer.py     # 方案C: 页面类型检测 + 工具优先级
 │   ├── browser/
 │   │   ├── manager.py              # Playwright CDP 连接 + 标签页管理 + 元素索引
+│   │   ├── stealth.py              # Task 8: 浏览器防检测脚本注入
 │   │   └── watchdogs.py            # 弹窗自动处理 + 页面崩溃恢复
 │   ├── config/
 │   │   └── settings.py             # Pydantic Settings (.env 配置)
@@ -139,7 +143,8 @@ web-insight/
 │   ├── llm/
 │   │   └── client.py               # LLM/VLM 客户端 (OpenAI 兼容)
 │   ├── memory/
-│   │   └── history.py              # ChromaDB 站点经验管理
+│   │   ├── history.py              # ChromaDB 站点经验管理
+│   │   └── task_memory.py          # Task 6: 短期记忆管理 + 消息压缩
 │   ├── perception/
 │   │   ├── dom.py                  # DOM 解析 (BS4+lxml, 纯函数)
 │   │   ├── dom_service.py          # DOM 服务 (全量元素提取 + 格式化)
@@ -151,7 +156,11 @@ web-insight/
 │       ├── registry.py             # 工具注册中心
 │       ├── browser_actions.py      # 浏览器操作工具 (12 个)
 │       └── models.py               # 工具参数模型
-├── tests/                          # pytest 测试 (107 个)
+├── tests/                          # pytest 测试 (182 个)
+│   ├── test_task5_loop_detector.py # Task 5: 循环检测单元测试
+│   ├── test_task6_task_memory.py   # Task 6: 短期记忆管理单元测试
+│   ├── test_task7_enhanced_tools.py # Task 7: 增强工具集单元测试
+│   ├── test_task8_stealth.py       # Task 8: 防检测基础单元测试
 │   ├── test_watchdogs.py           # 弹窗处理 + 页面崩溃恢复测试
 ├── .env.example                    # 环境变量模板
 ├── pyproject.toml
@@ -175,6 +184,11 @@ web-insight/
 | `visual_analyze` | VLM 视觉分析截图 |
 | `get_tabs_info` | 查看所有标签页信息 |
 | `switch_tab` | 切换到指定标签页 |
+| `new_tab` | 在新标签页打开 URL |
+| `close_tab` | 关闭指定标签页 |
+| `list_tabs` | 列出所有标签页 |
+| `select_dropdown` | 选择下拉菜单选项 |
+| `upload_file` | 上传文件到文件选择框 |
 | `done` | 标记任务完成并返回结果 |
 
 ## 技术选型

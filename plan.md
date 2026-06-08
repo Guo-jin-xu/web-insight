@@ -13,10 +13,10 @@
 | 2 | 清理 langchain 遗留代码 | ✅ | [Task 2](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L213) |
 | 3 | 增强 DOM 提取 (CDP) | ✅ | [Task 3](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L361) |
 | 4 | 弹窗/对话框处理 | ✅ | [Task 4](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L672) |
-| 5 | 循环检测 | ⬜ | [Task 5](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L814) |
-| 6 | 短期记忆管理 | ⬜ | [Task 6](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1028) |
-| 7 | 增强工具集 (iframe/标签/上传) | ⬜ | [Task 7](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1224) |
-| 8 | 防检测基础实现 | ⬜ | [Task 8](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1401) |
+| 5 | 循环检测 | ✅ | [Task 5](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L814) |
+| 6 | 短期记忆管理 | ✅ | [Task 6](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1028) |
+| 7 | 增强工具集 (iframe/标签/上传) | ✅ | [Task 7](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1224) |
+| 8 | 防检测基础实现 | ✅ | [Task 8](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1401) |
 | 9 | 更新 System Prompt | ✅ | [Task 9](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1513) |
 | 10 | 最终验证 | ⬜ | [Task 10](docs/superpowers/plans/2026-06-05-web-insight-enhancement.md#L1585) |
 

@@ -72,6 +72,33 @@ class SwitchTabAction(BaseModel):
     tab_index: int = Field(ge=0, description="标签页索引（0=第一个标签页）")
 
 
+class NewTabAction(BaseModel):
+    """在新标签页打开 URL。"""
+    url: str = Field(default="about:blank", description="URL 或 about:blank")
+
+
+class CloseTabAction(BaseModel):
+    """关闭指定标签页。"""
+    index: int = Field(default=-1, description="标签页索引，-1=当前页")
+
+
+class ListTabsAction(BaseModel):
+    """列出所有标签页。"""
+    pass
+
+
+class SelectDropdownAction(BaseModel):
+    """选择下拉菜单选项。"""
+    index: int = Field(ge=0, description="下拉菜单元素索引")
+    value: str = Field(description="要选择的选项文本")
+
+
+class UploadFileAction(BaseModel):
+    """上传文件到 input[type=file]。"""
+    index: int = Field(ge=0, description="文件上传元素索引")
+    file_path: str = Field(description="本地文件绝对路径")
+
+
 class DoneAction(BaseModel):
     """标记任务完成并返回最终结果。调用后终止执行。"""
     text: str = Field(description="任务的最终结果总结")

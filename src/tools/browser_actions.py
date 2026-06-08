@@ -23,16 +23,21 @@ from src.perception.vision import analyze_screenshot
 from src.tools.models import (
     ClickCoordinateAction,
     ClickElementAction,
+    CloseTabAction,
     DoneAction,
     ExtractContentAction,
     GetDomSnapshotAction,
     GetTabsInfoAction,
     InputTextAction,
+    ListTabsAction,
     NavigateAction,
+    NewTabAction,
     NoParamsAction,
     ScrollAction,
+    SelectDropdownAction,
     SendKeysAction,
     SwitchTabAction,
+    UploadFileAction,
     VisualAnalyzeAction,
 )
 from src.tools.registry import Registry
@@ -272,6 +277,59 @@ def create_browser_registry(browser: BrowserManager) -> Registry:
         if result["success"]:
             return f"已切换到标签页 [{params.tab_index}]: {result['new_url']}"
         return f"切换失败: {result.get('error', 'unknown')}"
+
+    @reg.action(
+        "在新标签页打开 URL。用于同时查看多个页面或对比信息。",
+        param_model=NewTabAction,
+    )
+    async def new_tab(params: NewTabAction):
+        result = await browser.new_tab(params.url)
+        if result["success"]:
+            return f"已在新标签页打开: {result['url']}"
+        return f"打开失败: {result.get('error', '')}"
+
+    @reg.action(
+        "关闭指定标签页。index=-1 关闭当前页。",
+        param_model=CloseTabAction,
+    )
+    async def close_tab(params: CloseTabAction):
+        result = await browser.close_tab(params.index)
+        if result["success"]:
+            return f"已关闭标签页，当前: {result['current_url']}"
+        return f"关闭失败: {result.get('error', '')}"
+
+    @reg.action(
+        "列出所有打开的标签页。",
+        param_model=ListTabsAction,
+    )
+    async def list_tabs(params: ListTabsAction):
+        tabs = await browser.list_tabs()
+        lines = [f"共 {len(tabs)} 个标签页:"]
+        for t in tabs:
+            marker = " ← 当前" if t["is_current"] else ""
+            lines.append(f"  [{t['index']}] {t['title'][:40]}{marker}")
+            lines.append(f"       {t['url'][:80]}")
+        return "\n".join(lines)
+
+    @reg.action(
+        "选择下拉菜单选项。index 来自 get_dom_snapshot，value 为选项文本。",
+        param_model=SelectDropdownAction,
+    )
+    async def select_dropdown(params: SelectDropdownAction):
+        result = await browser.select_dropdown(params.index, params.value)
+        if result["success"]:
+            return f"已选择 '{params.value}'"
+        return f"选择失败: {result.get('error', '')}"
+
+    @reg.action(
+        "上传文件到文件选择框。index 来自 get_dom_snapshot，file_path 为本地文件绝对路径。",
+        param_model=UploadFileAction,
+    )
+    async def upload_file(params: UploadFileAction):
+        result = await browser.upload_file(params.index, params.file_path)
+        if result["success"]:
+            return f"已上传文件: {params.file_path}"
+        return f"上传失败: {result.get('error', '')}"
 
     @reg.action(
         "标记任务完成并返回最终结果。调用后终止执行。所有提取、总结工作必须在调用 done 之前完成。",

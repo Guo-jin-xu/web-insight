@@ -15,8 +15,9 @@ from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
-from src.config.settings import settings
+from src.browser.stealth import inject_permission_handling, inject_stealth
 from src.browser.watchdogs import PopupHandler
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,10 @@ class BrowserManager:
         self._popup_handler = PopupHandler(self._page)
         await self._popup_handler.register()
 
+        # Task 8: 注入防检测脚本
+        await inject_permission_handling(self._context)
+        await inject_stealth(self._page)
+
         return self._page
 
     async def disconnect(self) -> None:
@@ -126,6 +131,82 @@ class BrowserManager:
             self._playwright = None
         self._context = None
         self._page = None
+
+    # ── 标签页管理（Task 7）───────────────────────────────
+
+    async def new_tab(self, url: str = "about:blank") -> dict:
+        """打开新标签页。"""
+        new_page = await self.context.new_page()
+        if url and url != "about:blank":
+            await new_page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        return {"success": True, "url": new_page.url}
+
+    async def close_tab(self, index: int = -1) -> dict:
+        """关闭指定标签页（-1 = 当前页）。"""
+        pages = self.context.pages
+        if len(pages) <= 1:
+            return {"success": False, "error": "Cannot close the last tab"}
+        if index == -1:
+            target = self._page
+        elif 0 <= index < len(pages):
+            target = pages[index]
+        else:
+            return {"success": False, "error": f"Tab {index} not found"}
+        await target.close()
+        self._page = self.context.pages[0]
+        return {"success": True, "current_url": self._page.url}
+
+    async def list_tabs(self) -> list[dict]:
+        """列出所有标签页。"""
+        tabs = []
+        for i, page in enumerate(self.context.pages):
+            try:
+                title = await page.title()
+            except Exception:
+                title = "(unknown)"
+            tabs.append({
+                "index": i,
+                "url": page.url,
+                "title": title,
+                "is_current": page == self._page,
+            })
+        return tabs
+
+    async def select_dropdown(self, index: int, value: str) -> dict:
+        """选择下拉菜单选项。"""
+        elements = await self.get_indexed_elements()
+        target = next((e for e in elements if e["index"] == index), None)
+        if target is None:
+            return {"success": False, "error": f"Element {index} not found"}
+        try:
+            el_handle = await self.page.query_selector(f'[data-index="{index}"]')
+            if el_handle is None:
+                # fallback: 通过标签名定位
+                el_handle = await self.page.query_selector("select")
+            if el_handle:
+                await el_handle.select_option(label=value)
+                return {"success": True, "selected": value}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Could not select option"}
+
+    async def upload_file(self, index: int, file_path: str) -> dict:
+        """上传文件到 input[type=file]。"""
+        elements = await self.get_indexed_elements()
+        target = next((e for e in elements if e["index"] == index), None)
+        if target is None:
+            return {"success": False, "error": f"Element {index} not found"}
+        try:
+            # 先尝试通过 data-index 定位
+            handle = await self.page.query_selector(f'[data-index="{index}"]')
+            if handle is None:
+                handle = await self.page.query_selector("input[type='file']")
+            if handle:
+                await handle.set_input_files(file_path)
+                return {"success": True, "file": file_path}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Could not upload file"}
 
     async def get_page_html(self) -> str:
         return await self.page.content()

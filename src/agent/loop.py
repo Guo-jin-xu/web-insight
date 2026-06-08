@@ -18,8 +18,10 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agent.action_merger import merge_redundant_actions
+from src.agent.loop_detector import ActionLoopDetector
 from src.agent.tool_prioritizer import get_priority_tools
 from src.llm.client import LLMClient, LLMResponse
+from src.memory.task_memory import MessageCompactor, TaskMemory
 from src.tools.registry import Registry
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,13 @@ class AgentLoop:
         self.consecutive_failures: int = 0
         self._done_result: str | None = None
         self._messages: list[dict] = []
+
+        # Task 5: 循环检测
+        self.loop_detector = ActionLoopDetector(window_size=20)
+
+        # Task 6: 短期记忆管理
+        self.task_memory = TaskMemory()
+        self.message_compactor = MessageCompactor(max_messages=30)
 
     @property
     def is_done(self) -> bool:
@@ -175,6 +184,17 @@ class AgentLoop:
                     "content": f"[系统通知] 页面弹出了以下对话框，已自动处理：\n" + "\n".join(msgs),
                 })
 
+        # Task 6: 消息压缩（如果过多）
+        self._messages = self.message_compactor.compact(self._messages)
+
+        # Task 6: 注入任务记忆上下文
+        memory_context = self.task_memory.get_context_for_llm()
+        if memory_context:
+            self._messages.append({
+                "role": "user",
+                "content": f"[任务记忆]\n{memory_context}"
+            })
+
         # Phase 1: 准备上下文
         messages = self._build_messages(system_prompt, self._messages)
         tool_schemas = self.registry.get_tool_schemas()
@@ -232,6 +252,19 @@ class AgentLoop:
                 # 记录工具调用日志
                 _log_tool_call(self.step_count, tc.name, tc.arguments, str(result))
 
+                # Task 5: 记录动作到循环检测器（排除某些动作）
+                if tc.name not in ("done", "go_back", "send_keys"):
+                    self.loop_detector.record_action(tc.name, tc.arguments)
+
+                # Task 6: 更新任务记忆
+                self.task_memory.add_step_result(self.step_count, tc.name, str(result))
+                if tc.name == "navigate":
+                    self.task_memory.add_visited_url(tc.arguments.get("url", ""))
+                elif tc.name == "extract_content":
+                    result_str = str(result)
+                    if len(result_str) > 50:
+                        self.task_memory.add_finding(result_str[:200])
+
                 # 检查是否调用了 done
                 if tc.name == "done":
                     self._done_result = str(result)
@@ -245,5 +278,25 @@ class AgentLoop:
 
             # 记录工具结果
             self._messages.append(self._format_tool_result(tc.id, tc.name, result))
+
+        # Task 5: 尝试记录页面状态到循环检测器
+        try:
+            current_url = self.get_current_url()
+            if current_url and self._browser and hasattr(self._browser, "page"):
+                page = self._browser.page
+                # 获取页面文本和元素数量用于指纹
+                text = await page.evaluate("() => document.body.innerText || ''")
+                elements = await page.evaluate("() => document.querySelectorAll('*').length")
+                self.loop_detector.record_page_state(current_url, text, elements)
+        except Exception as e:
+            logger.debug(f"循环检测页面状态记录跳过: {e}")
+
+        # Task 5: 注入循环检测提醒
+        nudge = self.loop_detector.get_nudge_message()
+        if nudge:
+            self._messages.append({
+                "role": "user",
+                "content": f"[系统提醒 - 循环检测]\n{nudge}"
+            })
 
         return None
