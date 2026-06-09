@@ -18,9 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agent.action_merger import merge_redundant_actions
-from src.agent.judge import Judge
 from src.agent.loop_detector import ActionLoopDetector
-from src.agent.planner import Planner
 from src.llm.client import LLMClient, LLMResponse
 from src.memory.task_memory import MessageCompactor, TaskMemory
 from src.tools.registry import Registry
@@ -37,13 +35,9 @@ PURPLE = "\033[38;5;99m"
 SUCCESS = "\033[32m"
 WARN = "\033[33m"
 ERROR = "\033[31m"
-CYAN = "\033[36m"
-BLUE = "\033[34m"
 
 AGENT_PREFIX = f"{BOLD}{PURPLE}[Agent]{RESET}"
-PLAN_PREFIX = f"{BOLD}{CYAN}[Plan]{RESET}"
-JUDGE_PREFIX = f"{BOLD}{BLUE}[Judge]{RESET}"
-REPLAN_PREFIX = f"{BOLD}{WARN}[Replan]{RESET}"
+
 
 # 工具结果最大长度（字符），防止 DOM snapshots 撑爆上下文
 MAX_TOOL_RESULT_LENGTH = 3000
@@ -109,11 +103,6 @@ class AgentLoop:
         self.task_memory = TaskMemory()
         self.message_compactor = MessageCompactor(max_messages=30)
 
-        # Judge & Planner: 自我评估 + 任务规划（基于 LLM）
-        self.judge = Judge(llm_client=self.llm_client)
-        self.planner = Planner(llm_client=self.llm_client)
-        self._current_plan: list[dict] = []
-
     @property
     def is_done(self) -> bool:
         return self._done_result is not None
@@ -167,18 +156,6 @@ class AgentLoop:
         system_prompt = self.system_prompt or BROWSER_AGENT_SYSTEM_PROMPT.format(
             current_time=get_current_time_str(),
         )
-
-        # 生成执行计划（LLM-based）
-        plan_data = await self.planner.generate_plan(self.task)
-        self._current_plan = plan_data["items"]
-        plan_text = self.planner.format_for_prompt(self._current_plan)
-        system_prompt += "\n\n" + plan_text
-
-        # 终端输出：Plan 概览
-        print(f"\n{PLAN_PREFIX} 生成执行计划（{len(self._current_plan)} 步）：")
-        for item in self._current_plan:
-            print(f"  Step {item['step']} {item['description']} → {item['expected_outcome']}")
-        print()
 
         self._messages = [{"role": "user", "content": self.task}]
 
@@ -289,29 +266,8 @@ class AgentLoop:
                 if tc.name == "done":
                     done_result = str(result)
                     print(f"  {BOLD}{step_label}{RESET}  {SUCCESS}done{RESET}")
-
-                    # Judge: 任务完成评估 — 检查任务是否真正完成
-                    judge_verdict = await self.judge.evaluate_task_completion(
-                        task=self.task,
-                        done_result=done_result,
-                        step_history=self.task_memory.steps,
-                    )
-
-                    if judge_verdict.is_success:
-                        print(f"    {JUDGE_PREFIX} {SUCCESS}✓{RESET} {judge_verdict.reasoning}")
-                        self._done_result = done_result
-                        return self._done_result
-                    else:
-                        print(f"    {JUDGE_PREFIX} {WARN}⚠{RESET} 任务未完成: {judge_verdict.failure_reason}")
-                        print(f"      分析: {judge_verdict.reasoning}")
-                        print(f"      {DIM}继续迭代...{RESET}")
-                        # 注入 Judge 反馈，让 LLM 继续执行
-                        self._messages.append({
-                            "role": "user",
-                            "content": judge_verdict.to_feedback_message(),
-                        })
-                        # 不设置 _done_result，继续循环
-                        continue
+                    self._done_result = done_result
+                    return self._done_result
 
             except Exception as e:
                 result = f"工具执行失败: {e}"
@@ -321,10 +277,10 @@ class AgentLoop:
             # 记录工具结果
             self._messages.append(self._format_tool_result(tc.id, tc.name, result))
 
-            # 动作失败时记录日志（Judge 任务完成评估仅在 done 后触发）
+            # 动作失败时记录日志
             is_failure = str(result).startswith("工具执行失败")
             if is_failure:
-                print(f"    {JUDGE_PREFIX} {WARN}⚠{RESET} 动作失败: {tc.name}")
+                print(f"    {WARN}⚠ 动作失败:{RESET} {tc.name}")
                 self._messages.append({
                     "role": "user",
                     "content": (
@@ -353,24 +309,6 @@ class AgentLoop:
             self._messages.append({
                 "role": "user",
                 "content": f"[系统提醒 - 循环检测]\n{nudge}"
-            })
-
-            # Planner: 检测到循环时重规划（LLM-based）
-            print(f"\n  {REPLAN_PREFIX} 步骤 {self.step_count} 停滞，触发重规划...")
-            replan = await self.planner.replan(
-                task=self.task,
-                current_plan=self._current_plan,
-                stalled_step=self.step_count,
-                reason=nudge,
-            )
-            self._current_plan = replan["items"]
-            plan_text = self.planner.format_for_prompt(self._current_plan)
-            print(f"  {REPLAN_PREFIX} 新计划（{len(self._current_plan)} 步）：")
-            for item in self._current_plan:
-                print(f"    Step {item['step']} {item['status']} {item['description']}")
-            self._messages.append({
-                "role": "user",
-                "content": f"[重规划]\n检测到循环，已重新生成执行计划：\n{plan_text}",
             })
 
         return None

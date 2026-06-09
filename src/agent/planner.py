@@ -3,7 +3,6 @@
 功能：
 - 使用 LLM 将用户任务分解为 PlanItem 列表
 - 跟踪每步执行状态
-- 停滞检测时自动重规划（LLM-based）
 """
 
 import logging
@@ -57,7 +56,7 @@ class Plan(BaseModel):
 class Planner:
     """任务规划器 — 基于 LLM 的任务分解。
 
-    使用 LLM 根据任务描述生成执行计划，支持停滞时重规划。
+    使用 LLM 根据任务描述生成执行计划。
     若 LLM 不可用，回退到通用步骤模板。
     """
 
@@ -158,100 +157,6 @@ class Planner:
             {"step": 4, "description": "总结结果并结束任务", "expected_outcome": "任务完成", "status": "pending"},
         ]
         return {"task": task, "items": items}
-
-    async def replan(
-        self,
-        task: str,
-        current_plan: list[dict],
-        stalled_step: int,
-        reason: str,
-    ) -> dict:
-        """当某步骤停滞时重新规划。
-
-        Args:
-            task: 原始任务
-            current_plan: 当前计划
-            stalled_step: 停滞的步骤号
-            reason: 停滞原因
-
-        Returns:
-            新的执行计划
-        """
-        logger.info(f"步骤 {stalled_step} 停滞: {reason}，重新规划...")
-
-        if self.llm_client is None:
-            return self._fallback_replan(task, current_plan, stalled_step, reason)
-
-        messages = self._build_replan_messages(task, current_plan, stalled_step, reason)
-
-        try:
-            response = await self.llm_client.chat(messages, temperature=0.3)
-            content = response.content.strip()
-            return self._parse_plan_response(task, content)
-        except Exception as e:
-            logger.warning(f"Planner LLM 重规划失败，回退到简单策略: {e}")
-            return self._fallback_replan(task, current_plan, stalled_step, reason)
-
-    def _build_replan_messages(
-        self,
-        task: str,
-        current_plan: list[dict],
-        stalled_step: int,
-        reason: str,
-    ) -> list[dict]:
-        """构建重规划的 LLM 消息。"""
-        plan_text = "\n".join(
-            f"Step {item['step']}: {item['description']} ({item.get('status', 'pending')})"
-            for item in current_plan
-        )
-
-        system_prompt = (
-            "你是一个任务规划助手。当前执行计划在某步骤停滞，需要重新规划。\n\n"
-            "要求：\n"
-            "1. 分析停滞原因，调整后续步骤策略\n"
-            "2. 每个步骤应包含：step(序号), description(操作描述), expected_outcome(预期结果)\n"
-            "3. 步骤应具体、可执行，避免重复导致停滞的操作\n\n"
-            "你必须以 JSON 格式返回新计划，不要添加任何其他文字：\n"
-            '{"items": [{"step": 1, "description": "...", "expected_outcome": "..."}, ...]}'
-        )
-
-        user_prompt = (
-            f"## 原始任务\n{task}\n\n"
-            f"## 当前计划\n{plan_text}\n\n"
-            f"## 停滞信息\n"
-            f"停滞步骤: Step {stalled_step}\n"
-            f"停滞原因: {reason}\n\n"
-            f"请重新制定执行计划，避免再次停滞。以 JSON 格式返回。"
-        )
-
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-
-    def _fallback_replan(
-        self,
-        task: str,
-        current_plan: list[dict],
-        stalled_step: int,
-        reason: str,
-    ) -> dict:
-        """简单重规划策略（LLM 不可用时）。"""
-        new_plan = self._fallback_plan(task)
-        remaining = current_plan[stalled_step - 1:] if stalled_step <= len(current_plan) else current_plan
-
-        # 标记停滞步骤为 failed
-        for item in remaining:
-            item_copy = dict(item)
-            if item_copy["step"] == stalled_step:
-                item_copy["status"] = "failed"
-            new_plan["items"].insert(0, item_copy)
-
-        # 重新编号
-        for i, item in enumerate(new_plan["items"], 1):
-            item["step"] = i
-
-        return new_plan
 
     def format_for_prompt(self, plan_items: list[dict]) -> str:
         """格式化计划为 system prompt 可注入的文本。

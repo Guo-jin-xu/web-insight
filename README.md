@@ -9,8 +9,8 @@ AI 驱动的浏览器自动化 Agent，原生异步循环 + Playwright CDP + VLM
 - **原生 Agent 循环** — 自研 step 循环，不依赖 LangGraph，轻量可控
 - **DOM 优先 + VLM 兜底** — 页面感知首选 DOM 解析（快），视觉分析仅兜底（准）
 - **CDP 连接** — 复用用户 Chrome 实例，可见可干预，保留登录态
-- **循环检测 + 自我评估** — 动作哈希追踪 + 页面指纹对比检测循环，Self-Judge 二次验证任务完成
-- **任务规划 + 重规划** — LLM 自动分解任务步骤，停滞时自动重规划
+- **循环检测** — 动作哈希追踪 + 页面指纹对比检测循环
+- **任务规划** — LLM 自动分解任务步骤
 - **短期记忆管理** — 任务内记忆（已访问 URL、关键发现、提取数据）+ 消息自动压缩
 - **多标签页管理** — 自动检测新标签页，支持手动查看和切换标签页
 - **弹窗自动处理** — 自动接受/关闭 alert/confirm/prompt 弹窗，页面崩溃自动恢复
@@ -106,23 +106,13 @@ Chrome 已连接: 新标签页
 ┌──────────────────────────────────────────────────────────────┐
 │                AgentLoop (src/agent/loop.py)                  │
 │                                                              │
-│   Planner 生成执行计划                                       │
-│        │                                                     │
-│        ▼                                                     │
-│   LLM 决策 ──► 工具选择 ──► 冗余合并 ──► 工具执行 ──► 循环   │
+│   LLM 决策 ──► 工具选择 ──► 冗余合并 ──► 工具执行 ──► done   │
 │                                              │               │
 │                              ┌───────────────┘               │
 │                              ▼                               │
-│                    ┌── 循环检测 ──► 重规划                    │
+│                    ┌── 循环检测 ──► 提醒注入                  │
 │                    ├── 记忆管理 ──► 上下文注入                │
-│                    ├── Self-Judge ──► 任务完成验证            │
 │                    └── 弹窗检查 ──► 系统通知注入              │
-│                                              │               │
-│                                         done 工具            │
-│                                              │               │
-│                                    Judge 评估通过             │
-│                                              │               │
-│                                         终止循环             │
 └──────────────────────────────────────────────────────────────┘
                │                │
     ┌──────────┘                │
@@ -147,9 +137,8 @@ Chrome 已连接: 新标签页
 5. **冗余合并** — Post-processing 消除冗余动作
 6. **工具执行** — 执行工具并记录结果
 7. **循环检测** — 记录动作哈希和页面指纹，检测循环
-8. **Self-Judge** — done 调用后二次验证任务完成
 
-终止条件：LLM 调用 done 且 Judge 评估通过 / 达到最大步数(16) / 连续失败5次
+终止条件：LLM 调用 done / 达到最大步数(16) / 连续失败5次
 
 ### 2. 路由器 (`src/agent/router.py`)
 
@@ -169,28 +158,14 @@ Chrome 已连接: 新标签页
   - 12次重复：强烈提醒
 - **页面指纹对比** — URL + 元素数 + 文本哈希构成页面指纹，检测连续5步页面无变化
 
-检测到循环时自动触发 Planner 重规划。
+### 4. 任务规划 (`src/agent/planner.py`)
 
-### 4. Self-Judge 自我评估 (`src/agent/judge.py`)
-
-done 工具被调用后的二次验证机制：
-
-1. 构建评估提示（原始任务 + 执行历史 + done 结果）
-2. 调用 LLM 获取评估结果（verdict/reasoning/failure_reason）
-3. 评估通过 → 终止并返回结果
-4. 评估失败 → 注入反馈消息，Agent 继续迭代
-
-规则兜底：空结果直接失败、步骤过少直接失败、LLM 解析失败默认通过。
-
-### 5. 任务规划 (`src/agent/planner.py`)
-
-基于 LLM 的任务分解与重规划：
+基于 LLM 的任务分解：
 
 - **generate_plan** — 将用户任务分解为 3-7 个执行步骤（step/description/expected_outcome）
-- **replan** — 检测到循环时重新规划，分析停滞原因并调整策略
 - **fallback** — LLM 不可用时回退到通用4步模板
 
-### 6. 页面感知 (`src/perception/`)
+### 5. 页面感知 (`src/perception/`)
 
 **DOM 优先**（`dom_service.py` + `dom.py`）：
 - 通过 JS evaluate 提取可交互元素（含可见性检测 + 视口裁剪）
@@ -202,7 +177,7 @@ done 工具被调用后的二次验证机制：
 - 仅在 DOM 无法识别元素时降级调用（视频、图片、Canvas）
 - JSON 解析容错：支持 markdown 代码块、纯 JSON、前后有解释文字
 
-### 7. 浏览器管理 (`src/browser/manager.py`)
+### 6. 浏览器管理 (`src/browser/manager.py`)
 
 - **CDP 连接** — `connect_over_cdp()` 复用用户 Chrome，保留登录态
 - **新页面检测** — `context.on('page')` 事件 + `asyncio.Event` 异步等待
@@ -211,7 +186,7 @@ done 工具被调用后的二次验证机制：
 - **弹窗处理** — PopupHandler 自动接受/关闭对话框
 - **防检测** — 注入 stealth 脚本隐藏 webdriver 属性
 
-### 8. 工具注册中心 (`src/tools/registry.py`)
+### 7. 工具注册中心 (`src/tools/registry.py`)
 
 装饰器模式的工具注册：
 - `@reg.action(description, param_model)` 注册工具
@@ -228,12 +203,11 @@ web-insight/
 │   ├── agent/
 │   │   ├── factory.py              # Agent 工厂（创建 AgentLoop 实例）
 │   │   ├── router.py               # 任务路由器（LLM 分类 → conversation/web_task）
-│   │   ├── loop.py                 # Agent 循环（step 循环 + 工具调用 + 循环检测 + 记忆管理 + Judge）
+│   │   ├── loop.py                 # Agent 循环（step 循环 + 工具调用 + 循环检测 + 记忆管理）
 │   │   ├── prompts.py              # 提示词集中管理
 │   │   ├── action_merger.py        # 冗余动作合并（Post-processing）
 │   │   ├── loop_detector.py        # 动作循环检测 + 页面停滞检测
-│   │   ├── judge.py                # Self-Judge 自我评估系统
-│   │   └── planner.py              # 任务规划系统（步骤分解 + 停滞重规划）
+│   │   ├── planner.py              # 任务规划系统（步骤分解）
 │   ├── browser/
 │   │   ├── manager.py              # Playwright CDP 连接 + 标签页管理 + 元素索引
 │   │   ├── stealth.py              # 浏览器防检测脚本注入

@@ -87,7 +87,7 @@ class TaskMemory:
 
     @property
     def steps(self) -> list[dict]:
-        """返回步骤历史，格式兼容 Judge.evaluate_task_completion。
+        """返回步骤历史。
 
         Returns:
             [{"step": 1, "tool": "...", "result": "..."}, ...]

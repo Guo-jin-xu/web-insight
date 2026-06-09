@@ -1,6 +1,6 @@
 """VLM 视觉分析 — 纯 httpx 调用，不依赖 langchain。
 
-仅在 DOM fallback 或 judge 阶段调用。
+仅在 DOM fallback 阶段调用。
 """
 
 import json
