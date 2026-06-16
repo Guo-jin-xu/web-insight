@@ -81,6 +81,10 @@ class LLMClient:
         if self.max_tokens is not None:
             payload["max_tokens"] = self.max_tokens
 
+        # 小米 MiMo API 需要禁用 thinking
+        if "xiaomimimo" in self.base_url:
+            payload["thinking"] = {"type": "disabled"}
+
         return await self._request(payload)
 
     async def chat_with_tools(
@@ -99,6 +103,10 @@ class LLMClient:
         }
         if self.max_tokens is not None:
             payload["max_tokens"] = self.max_tokens
+
+        # 小米 MiMo API 需要禁用 thinking
+        if "xiaomimimo" in self.base_url:
+            payload["thinking"] = {"type": "disabled"}
 
         return await self._request(payload)
 
@@ -126,7 +134,9 @@ class LLMClient:
         usage = data.get("usage", {})
 
         tool_calls = []
-        for tc in message.get("tool_calls", []):
+        # 处理 tool_calls 可能为 None 的情况
+        raw_tool_calls = message.get("tool_calls") or []
+        for tc in raw_tool_calls:
             func = tc.get("function", {})
             try:
                 arguments = json.loads(func.get("arguments", "{}"))

@@ -40,6 +40,12 @@ BROWSER_AGENT_SYSTEM_PROMPT = """你是浏览器自动化助手，操作 Chrome 
 1. visual_analyze(query="找到第一个视频") — 截图分析，返回元素坐标
 2. click_coordinate(x, y) — 按坐标点击
 
+**何时使用视觉分析：**
+- DOM 快照中找不到目标元素（如视频播放器、图片、Canvas）
+- 不确定当前页面状态或下一步操作
+- 需要点击视觉元素（视频、图片、按钮等）
+- 任何不确定的操作场景，优先调用 visual_analyze 获取视觉反馈
+
 ## 其他工具（辅助）
 get_dom_snapshot, click_element, send_keys, input_text, scroll, go_back, extract_content, visual_analyze, click_coordinate
 
