@@ -458,5 +458,11 @@ async def analyze_screenshot(screenshot_b64: str) -> PageAnalysis:
     try:
         return PageAnalysis.model_validate_json(json_str)
     except Exception as e:
-        logger.warning(f"JSON 解析失败，原始内容: {content[:300]}")
-        raise ValueError(f"VLM 返回内容无法解析为 JSON: {e}\n原始内容前300字符: {content[:300]}")
+        logger.warning(f"JSON 解析失败，降级为文本分析: {e}")
+        # 降级策略：把 VLM 返回的内容直接作为文本返回
+        # 这样 LLM 仍然可以从文本中提取有用信息
+        return PageAnalysis(
+            page_description="VLM 返回内容无法解析为结构化 JSON，以下为原始内容",
+            elements=[],
+            suggestions=content[:2000],  # 限制长度避免过长
+        )

@@ -46,6 +46,13 @@ BROWSER_AGENT_SYSTEM_PROMPT = """你是浏览器自动化助手，操作 Chrome 
 - 需要点击视觉元素（视频、图片、按钮等）
 - 任何不确定的操作场景，优先调用 visual_analyze 获取视觉反馈
 
+## 视觉分析后的操作检查（极其重要）
+每次调用 visual_analyze 后，必须：
+1. **检查返回的 suggestions 字段** — 如果建议中包含"目标元素不在当前视口，需要滚动"，则先 scroll 滚动页面，再重新 visual_analyze
+2. **避免重复点击** — 对于点赞、收藏等 toggle 类按钮，点击一次后不要再次点击（会取消操作）
+3. **验证操作结果** — 点击后如需确认，应通过 visual_analyze 检查状态变化（如按钮颜色、文字变化），而非盲目重复点击
+4. **坐标有效性** — 如果返回的坐标超出视口范围或明显不合理，不要执行点击，先滚动或重新分析
+
 ## 其他工具（辅助）
 get_dom_snapshot, click_element, send_keys, input_text, scroll, go_back, extract_content, visual_analyze, click_coordinate
 
