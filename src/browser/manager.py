@@ -26,6 +26,7 @@ def ensure_chrome_running() -> bool:
     """确保 Chrome 以 CDP 模式运行。
 
     默认端口 9222，如果未运行则尝试启动。
+    使用 --start-maximized 参数让 Chrome 以最大化窗口启动，匹配用户显示器尺寸。
     """
     port = 9222
     try:
@@ -50,7 +51,12 @@ def ensure_chrome_running() -> bool:
     user_data_dir = r"C:\chrome-debug-profile"
     try:
         subprocess.Popen(
-            [chrome_path, f"--remote-debugging-port={port}", f"--user-data-dir={user_data_dir}"],
+            [
+                chrome_path,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={user_data_dir}",
+                "--start-maximized",  # 以最大化窗口启动，匹配显示器尺寸
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

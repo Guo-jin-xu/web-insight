@@ -21,33 +21,41 @@ logger = logging.getLogger(__name__)
 SCREENSHOT_DIR = settings.project_root / "data" / "screenshots"
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
-VLM_ANALYSIS_PROMPT = """你是一个网页视觉分析专家。请分析这个网页截图，返回简洁的 JSON 分析结果。
+VLM_ANALYSIS_PROMPT_TEMPLATE = """你是一个网页视觉分析专家。请分析这个网页截图，返回简洁的 JSON 分析结果。
+
+## 图片尺寸信息（极其重要）
+- 图片宽度: {width} 像素
+- 图片高度: {height} 像素
+- 坐标系: 左上角为 (0, 0)，右下角为 ({width}, {height})
+- **严格约束**: x 必须在 [0, {width}] 范围内，y 必须在 [0, {height}] 范围内
+- **禁止**: 返回超出图片范围的坐标（如 y > {height}）
 
 ## 分析要求
 1. 页面描述：一句话概括页面类型和主要内容（不超过50字）
 2. 关键元素：只识别与用户任务最相关的 3-5 个可点击元素，每个提供：
    - name: 元素名称（简短）
    - type: 类型（button/link/input/other）
-   - x, y: 坐标（整数，从左上角(0,0)计算）
+   - x, y: 坐标（整数，**必须严格在图片范围内**）
    - description: 一句话说明用途
 3. 建议：下一步操作建议（不超过30字）
    - **重要**：如果对下一步操作不确定，建议中必须包含"使用 visual_analyze 进行视觉分析"
 
 ## 输出格式（严格 JSON，不要其他文字）
 ```json
-{
+{{
     "page_description": "页面描述",
     "elements": [
-        {"name": "元素名", "type": "link", "x": 300, "y": 200, "description": "用途"}
+        {{"name": "元素名", "type": "link", "x": 300, "y": 200, "description": "用途"}}
     ],
     "suggestions": "操作建议，不确定时建议 visual_analyze"
-}
+}}
 ```
 
-## 重要
+## 重要规则
 - 只输出 JSON，不要解释
 - 元素数量限制 3-5 个，只返回最关键的
-- 坐标必须是整数
+- **坐标必须严格在 [0, {width}] x [0, {height}] 范围内**
+- 如果目标元素不在当前视口内，请在 suggestions 中说明"目标元素不在当前视口，需要滚动"
 - 视频通常以链接或图片形式出现
 - **遇到不确定的操作时，必须在 suggestions 中建议调用 visual_analyze 工具**
 """
@@ -381,8 +389,20 @@ async def analyze_screenshot(screenshot_b64: str) -> PageAnalysis:
     Returns:
         PageAnalysis 结构化对象
     """
+    from PIL import Image
+    import io
+
+    # 解析图片尺寸
+    img_data = base64.b64decode(screenshot_b64)
+    img = Image.open(io.BytesIO(img_data))
+    img_width, img_height = img.size
+    logger.info(f"截图图片尺寸: {img_width}x{img_height}")
+
     # 保存截图到 data/screenshots 目录
     save_screenshot(screenshot_b64, prefix="analyze")
+
+    # 根据图片尺寸动态生成提示词
+    prompt = VLM_ANALYSIS_PROMPT_TEMPLATE.format(width=img_width, height=img_height)
 
     payload = {
         "model": settings.vlm_model_name,
@@ -390,7 +410,7 @@ async def analyze_screenshot(screenshot_b64: str) -> PageAnalysis:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": VLM_ANALYSIS_PROMPT},
+                    {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
@@ -438,5 +458,11 @@ async def analyze_screenshot(screenshot_b64: str) -> PageAnalysis:
     try:
         return PageAnalysis.model_validate_json(json_str)
     except Exception as e:
-        logger.warning(f"JSON 解析失败，原始内容: {content[:300]}")
-        raise ValueError(f"VLM 返回内容无法解析为 JSON: {e}\n原始内容前300字符: {content[:300]}")
+        logger.warning(f"JSON 解析失败，降级为文本分析: {e}")
+        # 降级策略：把 VLM 返回的内容直接作为文本返回
+        # 这样 LLM 仍然可以从文本中提取有用信息
+        return PageAnalysis(
+            page_description="VLM 返回内容无法解析为结构化 JSON，以下为原始内容",
+            elements=[],
+            suggestions=content[:2000],  # 限制长度避免过长
+        )
