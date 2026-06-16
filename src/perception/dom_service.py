@@ -129,7 +129,13 @@ class DOMState:
         for el in display:
             attrs = el.attributes
             label = attrs.get("aria-label", "") or attrs.get("placeholder", "") or attrs.get("name", "") or attrs.get("title", "")
-            extra = f" | {label}" if label else ""
+            href = attrs.get("href", "")
+            parts = []
+            if label:
+                parts.append(label)
+            if href:
+                parts.append(f"href={href}")
+            extra = f" | {' | '.join(parts)}" if parts else ""
             lines.append(
                 f"  [{el.index}] <{el.tag}> \"{el.text[:40]}\"{extra}"
             )
