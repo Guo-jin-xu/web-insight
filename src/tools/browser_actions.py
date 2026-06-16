@@ -13,6 +13,7 @@ extract_content, get_dom_snapshot, done
 - get_current_time → 注入 system prompt
 """
 
+import base64
 import urllib.parse
 from pathlib import Path
 
@@ -216,14 +217,59 @@ def create_browser_registry(browser: BrowserManager) -> Registry:
     async def visual_analyze(params: VisualAnalyzeAction):
         from src.schemas.vision import PageAnalysis
         import logging
+        from PIL import Image
+        import io
 
         _logger = logging.getLogger(__name__)
 
         try:
+            # 获取截图
             screenshot_b64 = await browser.screenshot_to_b64()
-            _logger.info(f"截图成功，大小: {len(screenshot_b64)} 字符")
+            screenshot_bytes_data = base64.b64decode(screenshot_b64)
+            img = Image.open(io.BytesIO(screenshot_bytes_data))
+            screenshot_width, screenshot_height = img.size
+
+            # 使用 JavaScript 获取实际视口尺寸（更准确）
+            try:
+                viewport_width = await browser.page.evaluate("window.innerWidth")
+                viewport_height = await browser.page.evaluate("window.innerHeight")
+            except Exception as e:
+                _logger.warning(f"JavaScript 获取视口尺寸失败，使用 fallback: {e}")
+                viewport_size = browser.page.viewport_size
+                viewport_width = viewport_size["width"] if viewport_size else screenshot_width
+                viewport_height = viewport_size["height"] if viewport_size else screenshot_height
+
+            _logger.info(f"截图尺寸: {screenshot_width}x{screenshot_height}, 视口尺寸: {viewport_width}x{viewport_height}")
+
+            # 计算缩放比例
+            scale_x = viewport_width / screenshot_width if screenshot_width > 0 else 1.0
+            scale_y = viewport_height / screenshot_height if screenshot_height > 0 else 1.0
+
+            _logger.info(f"缩放比例: x={scale_x:.2f}, y={scale_y:.2f}")
+
             analysis: PageAnalysis = await analyze_screenshot(screenshot_b64)
             _logger.info(f"VLM 分析成功：发现 {len(analysis.elements)} 个元素")
+
+            # 将 VLM 返回的坐标从截图空间转换到视口空间，并进行边界验证
+            for el in analysis.elements:
+                original_x, original_y = el.x, el.y
+
+                # 应用缩放转换
+                el.x = int(el.x * scale_x)
+                el.y = int(el.y * scale_y)
+
+                # 边界验证：确保坐标在视口范围内
+                if el.x < 0 or el.x >= viewport_width or el.y < 0 or el.y >= viewport_height:
+                    _logger.warning(
+                        f"元素 {el.name} 的坐标 ({original_x}, {original_y}) -> ({el.x}, {el.y}) "
+                        f"超出视口范围 ({viewport_width}x{viewport_height})，将被裁剪"
+                    )
+                    # 裁剪到有效范围
+                    el.x = max(0, min(el.x, viewport_width - 1))
+                    el.y = max(0, min(el.y, viewport_height - 1))
+
+                _logger.info(f"元素 {el.name}: 原坐标 ({original_x}, {original_y}) -> 转换后 ({el.x}, {el.y})")
+
         except Exception as e:
             _logger.error(f"视觉分析失败: {e}")
             return f"视觉分析失败: {e}\n\n请检查: 1) VLM 模型名称是否正确 2) API Key 是否有效 3) 网络是否可达"
